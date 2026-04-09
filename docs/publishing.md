@@ -14,7 +14,7 @@ Both registries upload source from your local directory — the GitHub repo does
 1. Sign up at [components.espressif.com](https://components.espressif.com) (GitHub OAuth)
 2. Go to **Settings > Tokens**, generate an API token
 3. `export IDF_COMPONENT_API_TOKEN=<your-token>`
-4. Install compote if needed: `pip install idf-component-manager`
+4. Install compote if needed: `get_idf && pip install idf-component-manager`
 
 Custom namespaces (e.g. `inanimate` instead of your username) require manual approval — request at components.espressif.com before publishing.
 
