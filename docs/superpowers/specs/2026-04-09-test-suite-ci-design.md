@@ -51,13 +51,19 @@ Mock design principles:
 
 ### Structure
 
-Each directory contains:
-- `platformio.ini` — targets `espressif32`, `esp32dev` board, Arduino framework. References the library via `lib_extra_dirs = ../../../` (repo root). Defines stub endpoint configs via build flags so the examples compile without real credentials.
-- `src/` — copy of the corresponding example `.ino` file from `examples/`. Copies rather than symlinks for cross-platform CI compatibility.
+Each directory contains only a `platformio.ini` — no source files. The `platformio.ini` uses `src_dir` to point directly at the corresponding example in `examples/`:
+
+```ini
+src_dir = ../../../examples/basic-websocket
+```
+
+This eliminates duplication — the `.ino` files live only in `examples/` and any API changes that break an example will be caught by CI.
+
+The `platformio.ini` targets `espressif32`, `esp32dev` board, Arduino framework. References the library via `lib_extra_dirs = ../../../` (repo root). Defines stub endpoint configs via build flags so the examples compile without real credentials.
 
 ### What It Verifies
 
-That the library compiles against a real ESP32 Arduino target with all declared dependencies resolved. Compile-only — no upload, no run.
+That the library compiles against a real ESP32 Arduino target with all declared dependencies resolved. Also verifies that the shipped examples stay in sync with the library API. Compile-only — no upload, no run.
 
 ## Build Verification — ESP-IDF
 
@@ -65,16 +71,20 @@ That the library compiles against a real ESP32 Arduino target with all declared 
 
 `test/build-espidf/sample-project/`
 
+### Source
+
+The ESP-IDF example lives in `examples/espidf-basic/` — a proper ESP-IDF example with `app_main()` that users can reference. It instantiates Courier with both WS and MQTT transports, exercises key API surface (setup, callbacks, send).
+
+The test build project references this example via CMake rather than duplicating source files.
+
 ### Structure
 
-- `CMakeLists.txt` — Top-level. Sets IDF minimum version, adds repo root as `EXTRA_COMPONENT_DIRS` so courier is found as a component.
-- `main/CMakeLists.txt` — Registers main component with dependency on courier.
-- `main/main.cpp` — Instantiates Courier with both WS and MQTT transports, exercises key API surface (setup, callbacks, send). Covers enough to verify includes and linkage.
+- `CMakeLists.txt` — Top-level. Sets IDF minimum version, adds repo root as `EXTRA_COMPONENT_DIRS` so courier is found as a component. References `examples/espidf-basic/main/` as the main component source.
 - `sdkconfig.defaults` — Minimal config targeting ESP32.
 
 ### What It Verifies
 
-That the `CMakeLists.txt` and `idf_component.yml` at the repo root work correctly for ESP-IDF consumers. No Arduino framework dependency — pure ESP-IDF.
+That the `CMakeLists.txt` and `idf_component.yml` at the repo root work correctly for ESP-IDF consumers. No Arduino framework dependency — pure ESP-IDF. Also verifies the ESP-IDF example stays in sync with the library API.
 
 ## Static Analysis
 
@@ -146,7 +156,15 @@ courier/
     workflows/
       ci.yml
   src/                          # (existing library source)
-  examples/                     # (existing examples)
+  examples/
+    basic-websocket/            # (existing)
+      basic-websocket.ino
+    mqtt-pubsub/                # (existing)
+      mqtt-pubsub.ino
+    espidf-basic/               # (new — ESP-IDF example for users)
+      main/
+        main.cpp
+        CMakeLists.txt
   test/
     mocks/
       Arduino.h
@@ -166,19 +184,12 @@ courier/
           test_mqtt_transport.cpp
     build-platformio/
       basic-websocket/
-        platformio.ini
-        src/
-          basic-websocket.ino
+        platformio.ini          # src_dir points to examples/basic-websocket/
       mqtt-pubsub/
-        platformio.ini
-        src/
-          mqtt-pubsub.ino
+        platformio.ini          # src_dir points to examples/mqtt-pubsub/
     build-espidf/
       sample-project/
-        CMakeLists.txt
-        main/
-          CMakeLists.txt
-          main.cpp
+        CMakeLists.txt          # references examples/espidf-basic/main/
         sdkconfig.defaults
   tools/
     run-tests.py
