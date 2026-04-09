@@ -9,10 +9,10 @@ Courier* Courier::_instance = nullptr;
 Courier::Courier(const CourierConfig& config)
     : _config(config),
       _state(COURIER_BOOTING),
-      _health{},
-      _reconnect{},
       _defaultTransport(config.defaultTransport ? config.defaultTransport : "ws"),
-      _defaultTopic(config.defaultTopic ? config.defaultTopic : "")
+      _defaultTopic(config.defaultTopic ? config.defaultTopic : ""),
+      _health{},
+      _reconnect{}
 {
   _instance = this;
 
@@ -143,6 +143,17 @@ void Courier::handleWifiConfiguringState()
 
 void Courier::handleWifiConnectedState()
 {
+  // Configure custom DNS servers if provided (before any HTTPS calls)
+  if (uint32_t(_config.dns1) != 0) {
+    Serial.printf("[courier] Configuring DNS: %s", _config.dns1.toString().c_str());
+    if (uint32_t(_config.dns2) != 0) {
+      Serial.printf(", %s", _config.dns2.toString().c_str());
+    }
+    Serial.println();
+    WiFi.config(WiFi.localIP(), WiFi.gatewayIP(), WiFi.subnetMask(),
+                _config.dns1, _config.dns2);
+  }
+
   // Attempt time synchronization once
   if (!_timeSyncAttempted)
   {

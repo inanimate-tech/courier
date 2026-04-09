@@ -26,6 +26,8 @@ struct CourierConfig {
   const char* apName = nullptr;          // WiFi AP name for config portal
   const char* defaultTransport = "ws";   // which transport send() uses
   const char* defaultTopic = nullptr;    // topic for send() if transport requires it
+  IPAddress dns1;                        // Primary DNS server (0.0.0.0 = use DHCP default)
+  IPAddress dns2;                        // Secondary DNS server (0.0.0.0 = none)
 };
 
 // NOTE: Only one Courier instance is supported per process. WiFiManager
