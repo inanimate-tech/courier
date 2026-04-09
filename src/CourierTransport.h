@@ -20,12 +20,13 @@ public:
     virtual void disconnect() = 0;
     virtual void loop() { drainPending(); }
     virtual bool isConnected() const = 0;
-    virtual bool sendMessage(const char* payload) = 0;
+    virtual bool send(const char* payload) = 0;
     virtual bool sendBinary(const uint8_t* data, size_t len) { (void)data; (void)len; return false; }
-    virtual bool publishTo(const char* topic, const char* payload, int qos = 0, bool retain = false) {
-        (void)topic; (void)qos; (void)retain;
-        return sendMessage(payload);  // default: ignore topic, just send
+    virtual bool publish(const char* topic, const char* payload) {
+        (void)topic;
+        return send(payload);  // default: ignore topic, just send
     }
+    virtual bool topicRequired() const { return false; }
     virtual const char* name() const = 0;
 
     // Suspend/resume: stops the transport task to free its stack memory

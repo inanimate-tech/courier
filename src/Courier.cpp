@@ -10,7 +10,9 @@ Courier::Courier(const CourierConfig& config)
     : _config(config),
       _state(COURIER_BOOTING),
       _health{},
-      _reconnect{}
+      _reconnect{},
+      _defaultTransport(config.defaultTransport ? config.defaultTransport : "ws"),
+      _defaultTopic(config.defaultTopic ? config.defaultTopic : "")
 {
   _instance = this;
 
@@ -583,38 +585,43 @@ void Courier::resumeTransports()
 
 bool Courier::send(const char* payload)
 {
-  bool sent = false;
-  for (int i = 0; i < _transportCount; i++) {
-    if (_transports[i].transport && _transports[i].transport->isConnected()) {
-      sent |= _transports[i].transport->sendMessage(payload);
-    }
+  CourierTransport* t = getTransport(_defaultTransport.c_str());
+  if (!t || !t->isConnected()) return false;
+  if (t->topicRequired() && !_defaultTopic.isEmpty()) {
+    return t->publish(_defaultTopic.c_str(), payload);
   }
-  return sent;
-}
-
-bool Courier::sendBinary(const uint8_t* data, size_t len)
-{
-  bool sent = false;
-  for (int i = 0; i < _transportCount; i++) {
-    if (_transports[i].transport && _transports[i].transport->isConnected()) {
-      sent |= _transports[i].transport->sendBinary(data, len);
-    }
-  }
-  return sent;
+  return t->send(payload);
 }
 
 bool Courier::sendTo(const char* transportName, const char* payload)
 {
   CourierTransport* t = getTransport(transportName);
   if (!t) return false;
-  return t->sendMessage(payload);
+  return t->send(payload);
 }
 
-bool Courier::sendToTopic(const char* transportName, const char* topic, const char* payload)
+bool Courier::sendBinaryTo(const char* transportName, const uint8_t* data, size_t len)
+{
+  CourierTransport* t = getTransport(transportName);
+  if (!t || !t->isConnected()) return false;
+  return t->sendBinary(data, len);
+}
+
+bool Courier::publishTo(const char* transportName, const char* topic, const char* payload)
 {
   CourierTransport* t = getTransport(transportName);
   if (!t) return false;
-  return t->publishTo(topic, payload);
+  return t->publish(topic, payload);
+}
+
+void Courier::setDefaultTransport(const char* name)
+{
+  _defaultTransport = name ? name : "ws";
+}
+
+void Courier::setDefaultTopic(const char* topic)
+{
+  _defaultTopic = topic ? topic : "";
 }
 
 // --- State queries ---

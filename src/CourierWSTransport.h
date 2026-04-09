@@ -29,7 +29,7 @@ public:
     void begin(const char* host, uint16_t port, const char* path) override;
     void disconnect() override;
     bool isConnected() const override;
-    bool sendMessage(const char* payload) override;
+    bool send(const char* payload) override;
     bool sendBinary(const uint8_t* data, size_t len) override;
     const char* name() const override { return "WebSocket"; }
     void suspend() override;

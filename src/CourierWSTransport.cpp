@@ -98,7 +98,7 @@ bool CourierWSTransport::isConnected() const
     return _connected.load(std::memory_order_acquire);
 }
 
-bool CourierWSTransport::sendMessage(const char* payload)
+bool CourierWSTransport::send(const char* payload)
 {
     if (!_connected.load(std::memory_order_acquire) || !_client) return false;
     int result = esp_websocket_client_send_text(_client, payload,

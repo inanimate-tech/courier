@@ -96,8 +96,13 @@ void CourierMqttTransport::unsubscribe(const char* topic)
     }
 }
 
-bool CourierMqttTransport::publishTo(const char* topic, const char* payload,
-                                      int qos, bool retain)
+bool CourierMqttTransport::publish(const char* topic, const char* payload)
+{
+    return publish(topic, payload, 0, false);
+}
+
+bool CourierMqttTransport::publish(const char* topic, const char* payload,
+                                    int qos, bool retain)
 {
     if (!_client || !_connected.load(std::memory_order_acquire)) return false;
     int result = esp_mqtt_client_publish(_client, topic, payload, 0,
@@ -164,7 +169,7 @@ bool CourierMqttTransport::isConnected() const
     return _client && _connected.load(std::memory_order_acquire);
 }
 
-bool CourierMqttTransport::sendMessage(const char* payload)
+bool CourierMqttTransport::send(const char* payload)
 {
     if (!_client || !_connected.load(std::memory_order_acquire) ||
         _defaultPublishTopic.empty()) return false;

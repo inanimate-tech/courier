@@ -23,7 +23,9 @@ struct CourierConfig {
   const char* host;
   uint16_t port = 443;
   const char* path = "/";
-  const char* apName = nullptr;   // WiFi AP name for config portal
+  const char* apName = nullptr;          // WiFi AP name for config portal
+  const char* defaultTransport = "ws";   // which transport send() uses
+  const char* defaultTopic = nullptr;    // topic for send() if transport requires it
 };
 
 // NOTE: Only one Courier instance is supported per process. WiFiManager
@@ -52,9 +54,13 @@ public:
 
   // --- Sending ---
   bool send(const char* payload);
-  bool sendBinary(const uint8_t* data, size_t len);
   bool sendTo(const char* transportName, const char* payload);
-  bool sendToTopic(const char* transportName, const char* topic, const char* payload);
+  bool sendBinaryTo(const char* transportName, const uint8_t* data, size_t len);
+  bool publishTo(const char* transportName, const char* topic, const char* payload);
+
+  // --- Default transport/topic ---
+  void setDefaultTransport(const char* name);
+  void setDefaultTopic(const char* topic);
 
   // --- Transports ---
   void addTransport(const char* name, CourierTransport* transport);
@@ -104,6 +110,10 @@ private:
 
   // Built-in WS transport
   CourierWSTransport _builtinWS;
+
+  // Default transport/topic for send()
+  String _defaultTransport = "ws";
+  String _defaultTopic;
 
   // WiFi
   WiFiManager _wm;

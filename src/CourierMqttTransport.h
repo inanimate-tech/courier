@@ -10,7 +10,7 @@
 
 // Configuration struct for CourierMqttTransport.
 // topics: auto-subscribed on (re)connect.
-// defaultPublishTopic: if set, sendMessage() publishes here.
+// defaultPublishTopic: if set, send() publishes here.
 // clientId: if set, used as MQTT client ID; otherwise IDF generates one.
 // cert_pem: TLS certificate (nullptr = no cert set by Courier).
 struct CourierMqttTransportConfig {
@@ -30,7 +30,8 @@ public:
     void begin(const char* host, uint16_t port, const char* path) override;
     void disconnect() override;
     bool isConnected() const override;
-    bool sendMessage(const char* payload) override;
+    bool send(const char* payload) override;
+    bool topicRequired() const override { return true; }
     const char* name() const override { return "MQTT"; }
     void suspend() override;
     void resume() override;
@@ -47,7 +48,7 @@ public:
     // Set the MQTT client ID (must be called before begin()).
     void setClientId(const char* clientId) { _configClientId = clientId ? clientId : ""; }
 
-    // Set the default publish topic for sendMessage().
+    // Set the default publish topic for send().
     void setDefaultPublishTopic(const char* topic) { _defaultPublishTopic = topic ? topic : ""; }
 
     // Dynamic topic management.
@@ -56,9 +57,11 @@ public:
     void subscribe(const char* topic, int qos = 0);
     void unsubscribe(const char* topic);
 
-    // Publish to an explicit topic (rather than the default device-event topic).
-    bool publishTo(const char* topic, const char* payload,
-                   int qos = 0, bool retain = false) override;
+    // Publish to an explicit topic (virtual override — uses QoS 0, no retain).
+    bool publish(const char* topic, const char* payload) override;
+
+    // Publish with explicit QoS and retain control.
+    bool publish(const char* topic, const char* payload, int qos, bool retain);
 
     // loop() inherited from base — just calls drainPending()
 
@@ -70,7 +73,7 @@ private:
     std::atomic<bool> _connected{false};
 
     std::string _configClientId;   // optional override from CourierMqttTransportConfig
-    std::string _defaultPublishTopic;  // topic for sendMessage() broadcast
+    std::string _defaultPublishTopic;  // topic for send() broadcast
 
     // Managed topic list — single source of truth for subscriptions.
     std::vector<std::string> _topics;
