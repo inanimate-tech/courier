@@ -1,6 +1,8 @@
 # Courier
 
-Batteries-included connectivity for ESP32. WiFi, WebSocket, MQTT, reconnection — all handled.
+Batteries-included JSON messaging for ESP32. WiFi, WebSocket, MQTT, reconnection — all handled.
+
+Courier expects JSON messages with a `"type"` field. Messages are parsed with ArduinoJson and dispatched to callbacks by type. Use `onRawMessage` for non-JSON or custom framing.
 
 ```cpp
 #include <Courier.h>
@@ -51,7 +53,9 @@ Courier courier({
   .host = "example.com",
   .port = 443,
   .path = "/ws",
-  .apName = "MyDevice"  // WiFi portal AP name
+  .apName = "MyDevice",           // WiFi portal AP name
+  .defaultTransport = "ws",       // which transport send() uses
+  .defaultTopic = nullptr         // topic for send() if transport requires it
 });
 
 courier.setup();
@@ -62,11 +66,15 @@ courier.isConnected();
 courier.getState();        // CourierState enum
 courier.isTimeSynced();
 
-// Sending
-courier.send(payload);                              // broadcast to all transports
-courier.sendBinary(data, len);                      // broadcast binary
-courier.sendTo("mqtt", payload);                    // send to named transport
-courier.sendToTopic("mqtt", "my/topic", payload);   // publish to MQTT topic
+// Sending — "To" suffix means you specify the transport
+courier.send(payload);                              // default transport + topic
+courier.sendTo("mqtt", payload);                    // named transport
+courier.sendBinaryTo("ws", data, len);              // named transport, binary
+courier.publishTo("mqtt", "my/topic", payload);     // named transport + topic
+
+// Defaults (can also set in config)
+courier.setDefaultTransport("ws");
+courier.setDefaultTopic("events/mine");
 
 // Transports
 courier.addTransport("mqtt", &mqttTransport);
@@ -96,14 +104,15 @@ courier.onTransportsDidConnect([]() { });    // after transports connect
 
 CourierMqttTransport mqtt({
   .topics = {"sensors/+/data"},           // auto-subscribed on (re)connect
-  .defaultPublishTopic = "my/events",     // used by send() broadcast
+  .defaultPublishTopic = "my/events",     // used by send() when MQTT is default transport
   .clientId = "my-device",
   .cert_pem = nullptr                     // nullptr = use cert bundle
 });
 
 mqtt.subscribe("alerts/#");
 mqtt.unsubscribe("alerts/#");
-mqtt.publishTo("topic", "payload", /*qos*/1, /*retain*/false);
+mqtt.publish("topic", "payload");                  // virtual override
+mqtt.publish("topic", "payload", /*qos*/1, /*retain*/false);  // QoS/retain overload
 ```
 
 ### Raw IDF config access
