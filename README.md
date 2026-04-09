@@ -2,7 +2,7 @@
 
 Batteries-included JSON messaging for ESP32. WiFi, WebSocket, MQTT, reconnection — all handled.
 
-Courier expects JSON messages with a `"type"` field. Messages are parsed with ArduinoJson and dispatched to callbacks by type. Use `onRawMessage` for non-JSON or custom framing.
+Courier expects JSON messages with a `"type"` field. Messages are parsed with ArduinoJson and the `type` string is passed to `onMessage` callbacks alongside the parsed document. Use `onRawMessage` for non-JSON or custom framing.
 
 ```cpp
 #include <Courier.h>
