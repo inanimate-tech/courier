@@ -59,8 +59,8 @@ void loop() {
   static unsigned long lastPublish = 0;
   if (millis() - lastPublish > 10000 && courier.isConnected()) {
     lastPublish = millis();
-    mqtt.publishTo("sensors/my-device/data",
-                   "{\"type\":\"reading\",\"temp\":22.5}");
+    mqtt.publish("sensors/my-device/data",
+                 "{\"type\":\"reading\",\"temp\":22.5}");
   }
 
   // Dynamic subscription example
