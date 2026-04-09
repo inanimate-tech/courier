@@ -8,6 +8,28 @@
 
 **Tech Stack:** PlatformIO (native + espressif32), ESP-IDF v5.3, Unity test framework, cppcheck, GitHub Actions, Python/Click/uv
 
+## Progress
+
+- [x] **Task 1:** Mock — Arduino.h and Arduino.cpp
+- [x] **Task 2:** Mock — WiFi, WiFiManager, WiFiClientSecure, HTTPClient
+- [x] **Task 3:** Mock — esp_websocket_client.h, mqtt_client.h, ezTime
+- [x] **Task 4:** Unit test — platformio.ini and test_ws_transport (18 tests passing)
+- [x] **Task 5:** Unit test — test_mqtt_transport (37 tests passing)
+- [x] **Task 6:** Unit test — test_courier (19 tests passing)
+- [x] **Task 7:** Build verification — PlatformIO example projects
+- [ ] **Task 8:** ESP-IDF example and build verification
+- [ ] **Task 9:** Test runner — tools/run-tests.py
+- [ ] **Task 10:** CI workflow — .github/workflows/ci.yml
+- [ ] **Task 11:** Branch protection
+- [ ] **Task 12:** Update CLAUDE.md with test commands
+
+**Total: 74 unit tests passing. Both PlatformIO example builds passing.**
+
+### Implementation Notes (deviations from original plan)
+
+- **Task 4:** `build_src_filter` doesn't work for PlatformIO test builds. Instead, `test/unit/lib/courier/` and `test/unit/lib/mocks/` were created as PlatformIO local libraries using symlinks + `library.json` files.
+- **Task 7:** PlatformIO example builds require `framework = arduino, espidf` (dual framework) because the library depends on `esp_websocket_client.h` (an ESP-IDF managed component). Each build project also needs `sdkconfig.defaults` and each example directory needs an `idf_component.yml`. A bug was fixed in `examples/mqtt-pubsub/mqtt-pubsub.ino` (`publishTo` → `publish`).
+
 ---
 
 ## File Structure
