@@ -46,7 +46,7 @@ Use `onConfigure` hooks to access the full configuration surface of each bundled
 
 **PlatformIO:**
 ```ini
-lib_deps = inanimate-tech/Courier
+lib_deps = inanimate/courier
 ```
 
 **ESP-IDF Component:**

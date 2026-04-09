@@ -1,5 +1,5 @@
 {
-  "name": "Courier",
+  "name": "courier",
   "version": "0.1.0",
   "description": "Batteries-included JSON messaging for ESP32 — WiFi, WebSocket, MQTT, reconnection, all handled",
   "keywords": "esp32, websocket, mqtt, wifi, connectivity, iot, reconnection",
