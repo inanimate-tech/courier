@@ -1,0 +1,24 @@
+{
+  "name": "Courier",
+  "version": "0.1.0",
+  "description": "Batteries-included ESP32 connectivity library — WiFi, WebSocket, MQTT, reconnection, all handled",
+  "keywords": "esp32, websocket, mqtt, wifi, connectivity, iot, reconnection",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/inanimate-tech/courier.git"
+  },
+  "authors": [
+    {
+      "name": "Inanimate",
+      "url": "https://github.com/inanimate-tech"
+    }
+  ],
+  "license": "MIT",
+  "frameworks": ["arduino", "espidf"],
+  "platforms": ["espressif32"],
+  "dependencies": {
+    "tzapu/WiFiManager": "^2.0.17",
+    "bblanchon/ArduinoJson": "^7.4.2",
+    "ropg/ezTime": "^0.8.3"
+  }
+}
