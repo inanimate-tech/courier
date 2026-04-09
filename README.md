@@ -30,6 +30,18 @@ void loop() { courier.loop(); }
 - **JSON routing** — messages parsed and dispatched by `type` field
 - **Transport map** — named transports, broadcast or targeted sending
 
+## Opinionated
+
+Courier bundles a number of other great libraries:
+
+- **WebSocket** — esp_websocket_client [Documentation](https://docs.espressif.com/projects/esp-protocols/esp_websocket_client/docs/latest/index.html)
+- **MQTT** — esp_mqtt_client [Documentation](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/protocols/mqtt.html)
+- **WiFi config** — WiFiManager [GitHub](https://github.com/tzapu/WiFiManager)
+- **JSON** — ArduinoJson [Documentation](https://arduinojson.org/)
+- **Time** — ezTime [GitHub](https://github.com/ropg/ezTime)
+
+Use `onConfigure` hooks to access the full configuration surface of each bundled library.
+
 ## Install
 
 **PlatformIO:**
@@ -117,7 +129,7 @@ mqtt.publish("topic", "payload", /*qos*/1, /*retain*/false);  // QoS/retain over
 
 ### Raw IDF config access
 
-For anything Courier doesn't wrap directly, use `onConfigure` hooks to access the underlying ESP-IDF config structs:
+For anything Courier doesn't bundle directly, use `onConfigure` hooks to access the underlying ESP-IDF config structs:
 
 ```cpp
 // WiFiManager
@@ -141,7 +153,7 @@ mqtt.onConfigure([](esp_mqtt_client_config_t& cfg) {
 });
 ```
 
-## Connection states
+## Connectivity state machine
 
 ```
 BOOTING -> WIFI_CONNECTING -> WIFI_CONNECTED -> TRANSPORTS_CONNECTING -> CONNECTED
@@ -150,6 +162,8 @@ BOOTING -> WIFI_CONNECTING -> WIFI_CONNECTED -> TRANSPORTS_CONNECTING -> CONNECT
                                                         |
                                                 CONNECTION_FAILED
 ```
+
+`onConnectionChange` fires at each state transition. `onError` fires alongside transitions caused by failures, providing a category and reason (e.g. `"WIFI"`, `"connection lost"`).
 
 ## Limitations
 
