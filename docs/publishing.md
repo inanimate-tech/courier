@@ -36,11 +36,6 @@ compote component pack --name courier
 ### PlatformIO Registry
 
 ```bash
-pio pkg publish
-```
-
-To publish under an org:
-```bash
 pio pkg publish --owner inanimate
 ```
 
