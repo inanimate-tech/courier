@@ -201,6 +201,9 @@ private:
   // Singleton for WiFiManager static callback
   static Courier* _instance;
 
+  // State transition — always use this instead of setting _state directly
+  void transitionTo(CourierState newState);
+
   // Fire callbacks helpers
   void fireConnectedCallbacks();
   void fireDisconnectedCallbacks();
