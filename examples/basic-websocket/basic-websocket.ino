@@ -1,10 +1,14 @@
 #include <Courier.h>
 
-Courier courier({
-  .host = "echo.websocket.org",
-  .port = 443,
-  .path = "/"
-});
+CourierConfig makeConfig() {
+  CourierConfig cfg;
+  cfg.host = "echo.websocket.org";
+  cfg.port = 443;
+  cfg.path = "/";
+  return cfg;
+}
+
+Courier courier(makeConfig());
 
 void setup() {
   Serial.begin(115200);
