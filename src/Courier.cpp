@@ -2,6 +2,9 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <ezTime.h>
+#ifdef ESP_PLATFORM
+#include <esp_netif.h>
+#endif
 
 // Static member initialization
 Courier* Courier::_instance = nullptr;
@@ -9,10 +12,10 @@ Courier* Courier::_instance = nullptr;
 Courier::Courier(const CourierConfig& config)
     : _config(config),
       _state(COURIER_BOOTING),
-      _health{},
-      _reconnect{},
       _defaultTransport(config.defaultTransport ? config.defaultTransport : "ws"),
-      _defaultTopic(config.defaultTopic ? config.defaultTopic : "")
+      _defaultTopic(config.defaultTopic ? config.defaultTopic : ""),
+      _health{},
+      _reconnect{}
 {
   _instance = this;
 
@@ -143,6 +146,29 @@ void Courier::handleWifiConfiguringState()
 
 void Courier::handleWifiConnectedState()
 {
+  // Configure custom DNS servers if provided (before any HTTPS calls).
+  // Uses esp_netif API to set DNS without switching to static IP mode.
+  // Sets MAIN + BACKUP for immediate use, and FALLBACK which survives DHCP renewals.
+#ifdef ESP_PLATFORM
+  if (uint32_t(_config.dns1) != 0) {
+    esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_dns_info_t dns;
+    dns.ip.type = IPADDR_TYPE_V4;
+
+    dns.ip.u_addr.ip4.addr = _config.dns1;
+    esp_netif_set_dns_info(netif, ESP_NETIF_DNS_MAIN, &dns);
+    esp_netif_set_dns_info(netif, ESP_NETIF_DNS_FALLBACK, &dns);
+    Serial.printf("[courier] DNS: %s", _config.dns1.toString().c_str());
+
+    if (uint32_t(_config.dns2) != 0) {
+      dns.ip.u_addr.ip4.addr = _config.dns2;
+      esp_netif_set_dns_info(netif, ESP_NETIF_DNS_BACKUP, &dns);
+      Serial.printf(", %s", _config.dns2.toString().c_str());
+    }
+    Serial.println();
+  }
+#endif
+
   // Attempt time synchronization once
   if (!_timeSyncAttempted)
   {
