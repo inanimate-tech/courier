@@ -1,1 +1,1 @@
-/Users/matt/code/courier/src/CourierWSTransport.h
+../../../../src/CourierWSTransport.h

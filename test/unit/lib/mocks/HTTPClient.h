@@ -1,1 +1,1 @@
-/Users/matt/code/courier/test/mocks/HTTPClient.h
+../../../../test/mocks/HTTPClient.h

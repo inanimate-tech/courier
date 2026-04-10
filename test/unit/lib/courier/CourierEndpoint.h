@@ -1,1 +1,1 @@
-/Users/matt/code/courier/src/CourierEndpoint.h
+../../../../src/CourierEndpoint.h
