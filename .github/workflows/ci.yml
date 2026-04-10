@@ -11,6 +11,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv
+        run: pip install uv
       - name: Install cppcheck
         run: sudo apt-get update && sudo apt-get install -y cppcheck
       - name: Run static analysis
@@ -23,8 +28,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install PlatformIO
-        run: pip install platformio
+      - name: Install uv and PlatformIO
+        run: pip install uv platformio
       - name: Run unit tests
         run: ./tools/run-tests.py unit
 
