@@ -9,7 +9,15 @@ Courier expects JSON messages with a `"type"` field. Messages are parsed with Ar
 ```cpp
 #include <Courier.h>
 
-Courier courier({.host = "api.example.com", .port = 443, .path = "/ws"});
+CourierConfig makeConfig() {
+  CourierConfig cfg;
+  cfg.host = "api.example.com";
+  cfg.port = 443;
+  cfg.path = "/ws";
+  return cfg;
+}
+
+Courier courier(makeConfig());
 
 void setup() {
   courier.onConnected([]() { courier.send("{\"type\":\"hello\"}"); });
@@ -60,25 +68,14 @@ dependencies:
 
 ## API
 
-### Courier
+See [docs/api.md](docs/api.md) for the full API reference.
+
+Quick overview:
 
 ```cpp
-Courier courier({
-  .host = "example.com",
-  .port = 443,
-  .path = "/ws",
-  .apName = "MyDevice",           // WiFi portal AP name
-  .defaultTransport = "ws",       // which transport send() uses
-  .defaultTopic = nullptr         // topic for send() if transport requires it
-});
-
-courier.setup();
-courier.loop();
-
 // State
 courier.isConnected();
 courier.getState();        // CourierState enum
-courier.isTimeSynced();
 
 // Sending — "To" suffix means you specify the transport
 courier.send(payload);                              // default transport + topic
@@ -86,73 +83,22 @@ courier.sendTo("mqtt", payload);                    // named transport
 courier.sendBinaryTo("ws", data, len);              // named transport, binary
 courier.publishTo("mqtt", "my/topic", payload);     // named transport + topic
 
-// Defaults (can also set in config)
-courier.setDefaultTransport("ws");
-courier.setDefaultTopic("events/mine");
-
 // Transports
 courier.addTransport("mqtt", &mqttTransport);
-courier.getTransport("mqtt");
-courier.removeTransport("mqtt");
-courier.setEndpoint("mqtt", {.path = "/mqtt"});
 courier.suspendTransports();   // free SRAM for OTA
 courier.resumeTransports();
 
-// Callbacks (multiple registrations supported)
+// Callbacks (multiple registrations supported, up to 4 per type)
 courier.onMessage([](const char* type, JsonDocument& doc) { });
 courier.onRawMessage([](const char* payload, size_t len) { });
 courier.onConnected([]() { });
 courier.onDisconnected([]() { });
-courier.onConnectionChange([](CourierState state) { });
 courier.onError([](const char* category, const char* msg) { });
 
-// Lifecycle hooks (run in order during state transitions)
-courier.onTransportsWillConnect([]() { });   // before transports start
-courier.onTransportsDidConnect([]() { });    // after transports connect
-```
-
-### MQTT Transport
-
-```cpp
-#include <CourierMqttTransport.h>
-
-CourierMqttTransport mqtt({
-  .topics = {"sensors/+/data"},           // auto-subscribed on (re)connect
-  .defaultPublishTopic = "my/events",     // used by send() when MQTT is default transport
-  .clientId = "my-device",
-  .cert_pem = nullptr                     // nullptr = use cert bundle
-});
-
-mqtt.subscribe("alerts/#");
-mqtt.unsubscribe("alerts/#");
-mqtt.publish("topic", "payload");                  // virtual override
-mqtt.publish("topic", "payload", /*qos*/1, /*retain*/false);  // QoS/retain overload
-```
-
-### Raw IDF config access
-
-For anything courier doesn't bundle directly, use `onConfigure` hooks to access the underlying ESP-IDF config structs:
-
-```cpp
-// WiFiManager
-courier.onConfigureWiFi([](WiFiManager& wm) {
-  wm.setConnectTimeout(30);
-  wm.setHostname("my-device");
-});
-
-// WebSocket (esp_websocket_client)
-courier.builtinWS().onConfigure([](esp_websocket_client_config_t& cfg) {
-  cfg.headers = "Authorization: Bearer token\r\n";
-  cfg.subprotocol = "graphql-ws";
-});
-
-// MQTT (esp_mqtt_client)
-mqtt.onConfigure([](esp_mqtt_client_config_t& cfg) {
-  cfg.credentials.username = "user";
-  cfg.credentials.authentication.password = "pass";
-  cfg.session.last_will.topic = "/status";
-  cfg.session.last_will.msg = "offline";
-});
+// Raw ESP-IDF config access
+courier.builtinWS().onConfigure([](esp_websocket_client_config_t& cfg) { });
+mqtt.onConfigure([](esp_mqtt_client_config_t& cfg) { });
+courier.onConfigureWiFi([](WiFiManager& wm) { });
 ```
 
 ## Connectivity state machine

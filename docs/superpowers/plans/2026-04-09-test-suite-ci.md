@@ -17,18 +17,21 @@
 - [x] **Task 5:** Unit test — test_mqtt_transport (37 tests passing)
 - [x] **Task 6:** Unit test — test_courier (19 tests passing)
 - [x] **Task 7:** Build verification — PlatformIO example projects
-- [ ] **Task 8:** ESP-IDF example and build verification
-- [ ] **Task 9:** Test runner — tools/run-tests.py
-- [ ] **Task 10:** CI workflow — .github/workflows/ci.yml
-- [ ] **Task 11:** Branch protection
-- [ ] **Task 12:** Update CLAUDE.md with test commands
+- [x] **Task 8:** ESP-IDF example (build verification deferred — see notes)
+- [x] **Task 9:** Test runner — tools/run-tests.py
+- [x] **Task 10:** CI workflow — .github/workflows/ci.yml
+- [ ] **Task 11:** Branch protection (requires CI to run first)
+- [x] **Task 12:** Update CLAUDE.md with test commands
 
-**Total: 74 unit tests passing. Both PlatformIO example builds passing.**
+**Total: 76 unit tests passing. Both PlatformIO example builds passing.**
 
 ### Implementation Notes (deviations from original plan)
 
 - **Task 4:** `build_src_filter` doesn't work for PlatformIO test builds. Instead, `test/unit/lib/courier/` and `test/unit/lib/mocks/` were created as PlatformIO local libraries using symlinks + `library.json` files.
 - **Task 7:** PlatformIO example builds require `framework = arduino, espidf` (dual framework) because the library depends on `esp_websocket_client.h` (an ESP-IDF managed component). Each build project also needs `sdkconfig.defaults` and each example directory needs an `idf_component.yml`. A bug was fixed in `examples/mqtt-pubsub/mqtt-pubsub.ino` (`publishTo` → `publish`).
+- **Rebase on main (DNS feature):** After rebasing, the DNS feature's `IPAddress` members broke C++11 aggregate initialization. Fixed by: removing `explicit` from `Courier` constructor, changing `CourierConfig.dns1/dns2` from `IPAddress` to `uint32_t`, changing `CourierEndpoint.host/path` from `String` to `const char*`, removing bogus `idf: ">=5.1"` from example `idf_component.yml` files. Moved `IPAddress` mock from `WiFi.h` to `Arduino.h`. Added 2 DNS config tests (76 total).
+- **Task 8:** ESP-IDF example created at `examples/espidf-basic/`, but the ESP-IDF build verification project was dropped. A full ESP-IDF build requires Arduino-as-component plus all Arduino library dependencies (ezTime, ArduinoJson, WiFiManager) registered as ESP-IDF components — significant infrastructure not worth the build test. The `build-espidf` CI job was also dropped.
+- **Task 10:** CI workflow has 3 jobs (static-analysis, unit-tests, build-platformio) instead of 4 — no `build-espidf` job.
 
 ---
 

@@ -13,9 +13,19 @@ This is an ESP32 library supporting two build systems:
 - **PlatformIO** (Arduino framework): configured via `library.json`
 - **ESP-IDF component**: configured via `CMakeLists.txt` and `idf_component.yml`
 
-There are no test commands, CI pipelines, or linting tools configured.
-
 To use in a PlatformIO project, add as a dependency. To use with ESP-IDF, register as a component. See `docs/publishing.md` for publishing to PlatformIO Registry and ESP Component Registry.
+
+## Testing
+
+Run all tests locally:
+```
+./tools/run-tests.py all                # everything
+./tools/run-tests.py static-analysis    # cppcheck on src/
+./tools/run-tests.py unit               # native unit tests
+./tools/run-tests.py build              # PlatformIO example builds
+```
+
+Unit tests run on native platform (not on device). They use mocks in `test/mocks/` for all ESP-IDF and Arduino dependencies.
 
 ## Architecture
 
