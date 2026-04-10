@@ -2,6 +2,9 @@
 
 Batteries-included JSON messaging for ESP32. WiFi and user configuration, WebSocket, MQTT, reconnection — all handled.
 
+> [!WARNING]
+> Courier is under active development so the API surface will change. See [docs/changelog.md](docs/changelog.md) for changes on each release.
+
 Motivation: When you make something neat on your [M5Stick](https://shop.m5stack.com/products/m5stickc-plus2-esp32-mini-iot-development-kit?variant=44269818216705) you want the quickest path to messaging the back-end, and you want to carry it to places to show people and configure the Wi-Fi from your phone. Courier is how you do that.
 
 Courier expects JSON messages with a `"type"` field. Messages are parsed with ArduinoJson and the `type` string is passed to `onMessage` callbacks alongside the parsed document. Use `onRawMessage` for non-JSON or custom framing.
