@@ -6,6 +6,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <cstring>
+#include <vector>
 
 // Minimal mock transport for multi-transport tests
 class MockTransport : public CourierTransport {
@@ -74,11 +75,10 @@ void setUp(void) {
     HTTPClient::setDefaultMockHeader("Tue, 18 Feb 2026 12:00:00 GMT");
     Serial.stopCapture();
 
-    CourierConfig config = {
-        .host = "test.example.com",
-        .port = 443,
-        .path = "/ws"
-    };
+    CourierConfig config;
+    config.host = "test.example.com";
+    config.port = 443;
+    config.path = "/ws";
     courier = new Courier(config);
 }
 
@@ -318,6 +318,47 @@ void test_on_error_callback_registered() {
     WiFi.resetMock();
 }
 
+void test_connection_change_fires_on_setup() {
+    std::vector<CourierState> states;
+    courier->onConnectionChange([&](CourierState s) {
+        states.push_back(s);
+    });
+    courier->setup();
+    TEST_ASSERT_EQUAL(1, states.size());
+    TEST_ASSERT_EQUAL(COURIER_WIFI_CONNECTING, states[0]);
+}
+
+void test_connection_change_fires_through_to_connected() {
+    std::vector<CourierState> states;
+    courier->onConnectionChange([&](CourierState s) {
+        states.push_back(s);
+    });
+    advanceToConnected();
+
+    // Should see: WIFI_CONNECTING, WIFI_CONNECTED, TRANSPORTS_CONNECTING, CONNECTED
+    TEST_ASSERT_TRUE(states.size() >= 4);
+    TEST_ASSERT_EQUAL(COURIER_WIFI_CONNECTING, states[0]);
+    TEST_ASSERT_EQUAL(COURIER_WIFI_CONNECTED, states[1]);
+    TEST_ASSERT_EQUAL(COURIER_TRANSPORTS_CONNECTING, states[2]);
+    TEST_ASSERT_EQUAL(COURIER_CONNECTED, states[3]);
+}
+
+void test_dns_config_defaults_to_zero() {
+    CourierConfig config;
+    config.host = "test.example.com";
+    TEST_ASSERT_EQUAL_UINT32(0, config.dns1);
+    TEST_ASSERT_EQUAL_UINT32(0, config.dns2);
+}
+
+void test_dns_config_custom_servers() {
+    CourierConfig config;
+    config.host = "test.example.com";
+    config.dns1 = (uint32_t)IPAddress(8, 8, 8, 8);
+    config.dns2 = (uint32_t)IPAddress(1, 1, 1, 1);
+    TEST_ASSERT_EQUAL_UINT32((uint32_t)IPAddress(8, 8, 8, 8), config.dns1);
+    TEST_ASSERT_EQUAL_UINT32((uint32_t)IPAddress(1, 1, 1, 1), config.dns2);
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
 
@@ -340,6 +381,10 @@ int main(int argc, char** argv) {
     RUN_TEST(test_publish_to_mqtt);
     RUN_TEST(test_publish_to_non_mqtt);
     RUN_TEST(test_on_error_callback_registered);
+    RUN_TEST(test_connection_change_fires_on_setup);
+    RUN_TEST(test_connection_change_fires_through_to_connected);
+    RUN_TEST(test_dns_config_defaults_to_zero);
+    RUN_TEST(test_dns_config_custom_servers);
 
     return UNITY_END();
 }
