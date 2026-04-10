@@ -416,6 +416,7 @@ void Courier::launchWiFiConfigPortal()
 {
   _wm.startConfigPortal(_apName.c_str());
   _state = COURIER_WIFI_CONFIGURING;
+  fireConnectionChangeCallbacks();
 }
 
 void Courier::staticWifiFailedCallback(WiFiManager* wm)
@@ -424,6 +425,7 @@ void Courier::staticWifiFailedCallback(WiFiManager* wm)
   {
     Serial.println("[courier] WiFi connection failed, launching config portal.");
     _instance->_state = COURIER_WIFI_CONFIGURING;
+    _instance->fireConnectionChangeCallbacks();
   }
 }
 
