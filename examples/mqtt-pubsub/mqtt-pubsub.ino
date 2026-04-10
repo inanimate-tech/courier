@@ -1,39 +1,42 @@
 #include <Courier.h>
 #include <CourierMqttTransport.h>
 
-Courier courier({
-  .host = "broker.example.com",
-  .port = 443,
-  .path = "/ws"
-});
+CourierConfig makeConfig() {
+  CourierConfig cfg;
+  cfg.host = "broker.example.com";
+  cfg.port = 443;
+  cfg.path = "/ws";
+  return cfg;
+}
 
-CourierMqttTransport mqtt({
-  .topics = {"sensors/+/data", "commands/my-device"},
-  .defaultPublishTopic = "sensors/my-device/data",
-  .clientId = "my-device-001",
-  .cert_pem = nullptr  // use default certificate bundle
-});
+Courier courier(makeConfig());
+CourierMqttTransport mqtt;
 
 // Configure MQTT broker credentials via raw IDF config access
 void configureMqtt() {
-  mqtt.onConfigure([](esp_mqtt_client_config_t& config) {
+  mqtt.onConfigure([](esp_mqtt_client_config_t& cfg) {
     // Set username/password, LWT, keepalive, etc.
     // These fields map directly to the ESP-IDF MQTT client config.
     // See: https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/protocols/mqtt.html
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-    config.credentials.username = "my-user";
-    config.credentials.authentication.password = "my-password";
-    config.session.last_will.topic = "devices/my-device/status";
-    config.session.last_will.msg = "offline";
+    cfg.credentials.username = "my-user";
+    cfg.credentials.authentication.password = "my-password";
+    cfg.session.last_will.topic = "devices/my-device/status";
+    cfg.session.last_will.msg = "offline";
 #else
-    config.username = "my-user";
-    config.password = "my-password";
+    cfg.username = "my-user";
+    cfg.password = "my-password";
 #endif
   });
 }
 
 void setup() {
   Serial.begin(115200);
+
+  mqtt.subscribe("sensors/+/data");
+  mqtt.subscribe("commands/my-device");
+  mqtt.setDefaultPublishTopic("sensors/my-device/data");
+  mqtt.setClientId("my-device-001");
 
   configureMqtt();
 
@@ -47,7 +50,10 @@ void setup() {
 
   // Add MQTT transport before setup
   courier.addTransport("mqtt", &mqtt);
-  courier.setEndpoint("mqtt", {.path = "/mqtt"});
+
+  CourierEndpoint mqttEndpoint;
+  mqttEndpoint.path = "/mqtt";
+  courier.setEndpoint("mqtt", mqttEndpoint);
 
   courier.setup();
 }
@@ -59,8 +65,8 @@ void loop() {
   static unsigned long lastPublish = 0;
   if (millis() - lastPublish > 10000 && courier.isConnected()) {
     lastPublish = millis();
-    mqtt.publishTo("sensors/my-device/data",
-                   "{\"type\":\"reading\",\"temp\":22.5}");
+    mqtt.publish("sensors/my-device/data",
+                 "{\"type\":\"reading\",\"temp\":22.5}");
   }
 
   // Dynamic subscription example

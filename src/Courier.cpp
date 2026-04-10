@@ -150,7 +150,7 @@ void Courier::handleWifiConnectedState()
   // Uses esp_netif API to set DNS without switching to static IP mode.
   // Sets MAIN + BACKUP for immediate use, and FALLBACK which survives DHCP renewals.
 #ifdef ESP_PLATFORM
-  if (uint32_t(_config.dns1) != 0) {
+  if (_config.dns1 != 0) {
     esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     esp_netif_dns_info_t dns;
     dns.ip.type = IPADDR_TYPE_V4;
@@ -158,12 +158,12 @@ void Courier::handleWifiConnectedState()
     dns.ip.u_addr.ip4.addr = _config.dns1;
     esp_netif_set_dns_info(netif, ESP_NETIF_DNS_MAIN, &dns);
     esp_netif_set_dns_info(netif, ESP_NETIF_DNS_FALLBACK, &dns);
-    Serial.printf("[courier] DNS: %s", _config.dns1.toString().c_str());
+    Serial.printf("[courier] DNS: %s", IPAddress(_config.dns1).toString().c_str());
 
-    if (uint32_t(_config.dns2) != 0) {
+    if (_config.dns2 != 0) {
       dns.ip.u_addr.ip4.addr = _config.dns2;
       esp_netif_set_dns_info(netif, ESP_NETIF_DNS_BACKUP, &dns);
-      Serial.printf(", %s", _config.dns2.toString().c_str());
+      Serial.printf(", %s", IPAddress(_config.dns2).toString().c_str());
     }
     Serial.println();
   }
@@ -202,12 +202,12 @@ void Courier::handleTransportsConnectingState()
       TransportEntry& entry = _transports[i];
       if (!entry.transport || entry.transport->isConnected()) continue;
 
-      const char* host = entry.endpoint.host.isEmpty()
-          ? _config.host : entry.endpoint.host.c_str();
+      const char* host = (entry.endpoint.host && entry.endpoint.host[0])
+          ? entry.endpoint.host : _config.host;
       uint16_t port = entry.endpoint.port == 0
           ? _config.port : entry.endpoint.port;
-      const char* path = entry.endpoint.path.isEmpty()
-          ? _config.path : entry.endpoint.path.c_str();
+      const char* path = (entry.endpoint.path && entry.endpoint.path[0])
+          ? entry.endpoint.path : _config.path;
 
       entry.transport->begin(host, port, path);
     }

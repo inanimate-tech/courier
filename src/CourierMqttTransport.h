@@ -24,7 +24,7 @@ struct CourierMqttTransportConfig {
 class CourierMqttTransport : public CourierTransport {
 public:
     CourierMqttTransport();
-    explicit CourierMqttTransport(const CourierMqttTransportConfig& config);
+    CourierMqttTransport(const CourierMqttTransportConfig& config);
     ~CourierMqttTransport();
 
     void begin(const char* host, uint16_t port, const char* path) override;

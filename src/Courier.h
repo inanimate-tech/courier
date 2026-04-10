@@ -21,13 +21,25 @@ enum CourierState {
 
 struct CourierConfig {
   const char* host;
-  uint16_t port = 443;
-  const char* path = "/";
-  const char* apName = nullptr;          // WiFi AP name for config portal
-  const char* defaultTransport = "ws";   // which transport send() uses
-  const char* defaultTopic = nullptr;    // topic for send() if transport requires it
-  IPAddress dns1;                        // Primary DNS server (0.0.0.0 = use DHCP default)
-  IPAddress dns2;                        // Secondary DNS server (0.0.0.0 = none)
+  uint16_t port;
+  const char* path;
+  const char* apName;
+  const char* defaultTransport;
+  const char* defaultTopic;
+  uint32_t dns1;
+  uint32_t dns2;
+
+  CourierConfig(const char* host = nullptr,
+                uint16_t port = 443,
+                const char* path = "/",
+                const char* apName = nullptr,
+                const char* defaultTransport = "ws",
+                const char* defaultTopic = nullptr,
+                uint32_t dns1 = 0,
+                uint32_t dns2 = 0)
+      : host(host), port(port), path(path), apName(apName),
+        defaultTransport(defaultTransport), defaultTopic(defaultTopic),
+        dns1(dns1), dns2(dns2) {}
 };
 
 // NOTE: Only one Courier instance is supported per process. WiFiManager
@@ -43,7 +55,7 @@ public:
   using ConnectionChangeCallback = std::function<void(CourierState state)>;
   using ErrorCallback = std::function<void(const char* category, const char* message)>;
 
-  explicit Courier(const CourierConfig& config);
+  Courier(const CourierConfig& config);
   ~Courier();
 
   void setup();

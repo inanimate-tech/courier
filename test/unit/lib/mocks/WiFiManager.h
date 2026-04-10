@@ -1,0 +1,1 @@
+../../../../test/mocks/WiFiManager.h
