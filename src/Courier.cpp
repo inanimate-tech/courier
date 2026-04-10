@@ -66,6 +66,7 @@ void Courier::setup()
   _reconnect.lastAttemptMillis = now;
 
   _state = COURIER_WIFI_CONNECTING;
+  fireConnectionChangeCallbacks();
 }
 
 void Courier::loop()
@@ -121,6 +122,7 @@ void Courier::handleWifiConnectingState()
     {
       Serial.println("[courier] WiFi connected!");
       _state = COURIER_WIFI_CONNECTED;
+      fireConnectionChangeCallbacks();
     }
     else
     {
@@ -141,6 +143,7 @@ void Courier::handleWifiConfiguringState()
   {
     Serial.println("[courier] Config portal closed. Connecting...");
     _state = COURIER_WIFI_CONNECTING;
+    fireConnectionChangeCallbacks();
   }
 }
 
@@ -187,6 +190,7 @@ void Courier::handleWifiConnectedState()
 
   // Transition to TRANSPORTS_CONNECTING
   _state = COURIER_TRANSPORTS_CONNECTING;
+  fireConnectionChangeCallbacks();
   _transportsConnectingStartMillis = millis();
   _transportsBeginCalled = false;
 }
@@ -370,6 +374,7 @@ void Courier::handleReconnectingState()
     Serial.println("[courier] WiFi lost - resetting to WiFi connection state");
     WiFi.disconnect();
     _state = COURIER_WIFI_CONNECTING;
+    fireConnectionChangeCallbacks();
     _timeSyncAttempted = false;
     _reconnect.attempts = 0;
     _reconnect.currentInterval = MIN_RECONNECT_INTERVAL;
@@ -385,6 +390,7 @@ void Courier::handleReconnectingState()
     }
   }
   _state = COURIER_WIFI_CONNECTED;
+  fireConnectionChangeCallbacks();
 }
 
 void Courier::handleConnectionFailedState()
