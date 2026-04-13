@@ -50,10 +50,10 @@ void test_begin_creates_client_with_wss_uri() {
     TEST_ASSERT_EQUAL_STRING("wss://example.com:443/ws/abc123", client->uri.c_str());
 }
 
-void test_begin_sets_config_no_cert_by_default() {
+void test_begin_sets_config_defaults() {
     ws->begin("host", 443, "/path");
     auto* client = MockWebSocketClient::lastInstance();
-    TEST_ASSERT_TRUE(client->cert_pem.empty());
+    TEST_ASSERT_FALSE(client->cert_pem.empty());
     TEST_ASSERT_TRUE(client->disable_auto_reconnect);
     TEST_ASSERT_EQUAL(20, client->pingpong_timeout_sec);
 }
@@ -162,7 +162,20 @@ void test_config_cert_pem_passed_to_client() {
     TEST_ASSERT_EQUAL_STRING(MY_CERT, client->cert_pem.c_str());
 }
 
-void test_config_no_cert_by_default_nullptr() {
+void test_default_certs_used_by_default() {
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    TEST_ASSERT_FALSE(client->cert_pem.empty());
+    TEST_ASSERT_NOT_NULL(strstr(client->cert_pem.c_str(), "BEGIN CERTIFICATE"));
+}
+
+void test_no_cert_when_default_certs_disabled() {
+    delete ws;
+    CourierWSTransportConfig cfg;
+    cfg.use_default_certs = false;
+    ws = new CourierWSTransport(cfg);
+    ws->setMessageCallback(onMessageCallback);
+    ws->setConnectionCallback(onConnectionCallback);
     ws->begin("host", 443, "/path");
     auto* client = MockWebSocketClient::lastInstance();
     TEST_ASSERT_TRUE(client->cert_pem.empty());
@@ -207,7 +220,7 @@ int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_name_is_ws);
     RUN_TEST(test_begin_creates_client_with_wss_uri);
-    RUN_TEST(test_begin_sets_config_no_cert_by_default);
+    RUN_TEST(test_begin_sets_config_defaults);
     RUN_TEST(test_begin_starts_client);
     RUN_TEST(test_connected_after_connect_event);
     RUN_TEST(test_disconnected_after_disconnect_event);
@@ -219,7 +232,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_disconnect_sets_not_connected);
     RUN_TEST(test_reconnect_creates_new_client);
     RUN_TEST(test_config_cert_pem_passed_to_client);
-    RUN_TEST(test_config_no_cert_by_default_nullptr);
+    RUN_TEST(test_default_certs_used_by_default);
+    RUN_TEST(test_no_cert_when_default_certs_disabled);
     RUN_TEST(test_on_configure_called_before_init);
     RUN_TEST(test_on_configure_can_override_config_cert);
     RUN_TEST(test_on_configure_not_set_works);

@@ -1,6 +1,6 @@
 {
   "name": "courier",
-  "version": "0.2.0",
+  "version": "0.3.0-dev",
   "description": "Batteries-included JSON messaging for ESP32 — WiFi, WebSocket, MQTT, reconnection, all handled",
   "keywords": "esp32, websocket, mqtt, wifi, connectivity, iot, reconnection",
   "repository": {
