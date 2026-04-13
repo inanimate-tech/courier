@@ -8,7 +8,8 @@
 #include <string>
 
 struct CourierWSTransportConfig {
-    const char* cert_pem = nullptr;  // TLS cert (nullptr = no cert set by Courier)
+    const char* cert_pem = nullptr;      // Specific CA cert in PEM format
+    bool use_default_certs = true;       // Use Courier's built-in root CA certs (GTS Root R4)
 };
 
 class CourierWSTransport : public CourierTransport {
@@ -25,6 +26,7 @@ public:
     using ConfigureCallback = std::function<void(esp_websocket_client_config_t&)>;
 #endif
     void onConfigure(ConfigureCallback cb);
+    void useDefaultCerts();  // Use Courier's built-in root CA certs (GTS Root R4)
 
     void begin(const char* host, uint16_t port, const char* path) override;
     void disconnect() override;
@@ -39,6 +41,7 @@ public:
 
 private:
     const char* _certPem = nullptr;
+    bool _useDefaultCerts = true;
     ConfigureCallback _configureCallback;
 
     esp_websocket_client_handle_t _client = nullptr;
