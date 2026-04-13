@@ -57,16 +57,34 @@ Use `onConfigure` hooks to access the full configuration surface of each bundled
 
 ## Install
 
-**PlatformIO:**
+### PlatformIO
+
+**From GitHub** (recommended while in active development):
 ```ini
-lib_deps = inanimate/courier
+lib_deps = https://github.com/inanimate-tech/courier.git
+```
+Or to pin a version: `https://github.com/inanimate-tech/courier.git#v0.2.0`
+
+**From the PlatformIO registry** (for stable versions):
+```ini
+lib_deps = inanimate/courier@0.2.0
 ```
 
-**ESP-IDF Component:**
+### ESP-IDF Component
+
+**From GitHub** (recommended while in active development):
 ```yml
 dependencies:
   inanimate-tech/courier:
-    version: "^0.1.0"
+    git: https://github.com/inanimate-tech/courier.git
+```
+Or to pin a version, add `version: v0.2.0`
+
+**From the ESP Component Registry** (for stable versions):
+```yml
+dependencies:
+  inanimate-tech/courier:
+    version: "0.2.0"
 ```
 
 ## API
