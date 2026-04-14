@@ -7,7 +7,7 @@ Batteries-included JSON messaging for ESP32. WiFi and user configuration, WebSoc
 
 Motivation: When you make something neat on your [M5Stick](https://shop.m5stack.com/products/m5stickc-plus2-esp32-mini-iot-development-kit?variant=44269818216705) you want the quickest path to messaging the back-end, and you want to carry it to places to show people and configure the Wi-Fi from your phone. Courier is how you do that.
 
-Courier expects JSON messages with a `"type"` field. Messages are parsed with ArduinoJson and the `type` string is passed to `onMessage` callbacks alongside the parsed document. Use `onRawMessage` for non-JSON or custom framing.
+Courier expects JSON messages with a `"type"` field. Messages are parsed with ArduinoJson and the `type` string is passed to the `onMessage` callback alongside the parsed document. Use `onRawMessage` for non-JSON or custom framing.
 
 ```cpp
 #include <Courier.h>
@@ -109,7 +109,7 @@ courier.addTransport("mqtt", &mqttTransport);
 courier.suspendTransports();   // free SRAM for OTA
 courier.resumeTransports();
 
-// Callbacks (multiple registrations supported, up to 4 per type)
+// Callbacks (single-slot, last registration wins)
 courier.onMessage([](const char* type, JsonDocument& doc) { });
 courier.onRawMessage([](const char* payload, size_t len) { });
 courier.onConnected([]() { });
@@ -137,6 +137,7 @@ BOOTING -> WIFI_CONNECTING -> WIFI_CONNECTED -> TRANSPORTS_CONNECTING -> CONNECT
 ## Limitations
 
 - **Single instance** — WiFiManager requires a static callback, so only one Courier instance per process
+- **Single-slot callbacks** — each `on*` method is a setter (last registration wins). Application frameworks take the slot and expose virtual methods for subclasses
 - **Single message slot** — transport callbacks queue one pending message at a time; messages arriving before the main loop drains are dropped
 - **Arduino + ESP-IDF** — depends on Arduino framework for WiFiManager, ArduinoJson, ezTime
 

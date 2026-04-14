@@ -489,12 +489,8 @@ void Courier::handleTransportMessage(const char* payload, size_t length)
 {
   _health.consecutiveTransportFailures = 0;
 
-  // Fire raw message callbacks first
-  for (int i = 0; i < _rawMessageCallbackCount; i++) {
-    if (_rawMessageCallbacks[i]) {
-      _rawMessageCallbacks[i](payload, length);
-    }
-  }
+  // Fire raw message callback
+  if (_rawMessageCallback) _rawMessageCallback(payload, length);
 
   // Parse JSON
   JsonDocument doc;
@@ -507,12 +503,8 @@ void Courier::handleTransportMessage(const char* payload, size_t length)
 
   const char* mtype = doc["type"] | "";
 
-  // Fire typed message callbacks
-  for (int i = 0; i < _messageCallbackCount; i++) {
-    if (_messageCallbacks[i]) {
-      _messageCallbacks[i](mtype, doc);
-    }
-  }
+  // Fire typed message callback
+  if (_messageCallback) _messageCallback(mtype, doc);
 }
 
 void Courier::handleTransportConnection(CourierTransport* transport, bool connected)
@@ -673,58 +665,42 @@ void Courier::setAPName(const char* name)
 
 void Courier::onMessage(MessageCallback cb)
 {
-  if (_messageCallbackCount < MAX_CALLBACKS) {
-    _messageCallbacks[_messageCallbackCount++] = cb;
-  }
+  _messageCallback = cb;
 }
 
 void Courier::onRawMessage(RawMessageCallback cb)
 {
-  if (_rawMessageCallbackCount < MAX_CALLBACKS) {
-    _rawMessageCallbacks[_rawMessageCallbackCount++] = cb;
-  }
+  _rawMessageCallback = cb;
 }
 
 void Courier::onConnected(Callback cb)
 {
-  if (_connectedCallbackCount < MAX_CALLBACKS) {
-    _connectedCallbacks[_connectedCallbackCount++] = cb;
-  }
+  _connectedCallback = cb;
 }
 
 void Courier::onDisconnected(Callback cb)
 {
-  if (_disconnectedCallbackCount < MAX_CALLBACKS) {
-    _disconnectedCallbacks[_disconnectedCallbackCount++] = cb;
-  }
+  _disconnectedCallback = cb;
 }
 
 void Courier::onConnectionChange(ConnectionChangeCallback cb)
 {
-  if (_connectionChangeCallbackCount < MAX_CALLBACKS) {
-    _connectionChangeCallbacks[_connectionChangeCallbackCount++] = cb;
-  }
+  _connectionChangeCallback = cb;
 }
 
 void Courier::onError(ErrorCallback cb)
 {
-  if (_errorCallbackCount < MAX_CALLBACKS) {
-    _errorCallbacks[_errorCallbackCount++] = cb;
-  }
+  _errorCallback = cb;
 }
 
 void Courier::onTransportsWillConnect(Callback cb)
 {
-  if (_willConnectHookCount < MAX_CALLBACKS) {
-    _willConnectHooks[_willConnectHookCount++] = cb;
-  }
+  _willConnectHook = cb;
 }
 
 void Courier::onTransportsDidConnect(Callback cb)
 {
-  if (_didConnectHookCount < MAX_CALLBACKS) {
-    _didConnectHooks[_didConnectHookCount++] = cb;
-  }
+  _didConnectHook = cb;
 }
 
 void Courier::onConfigureWiFi(WiFiConfigureCallback cb)
@@ -736,16 +712,12 @@ void Courier::onConfigureWiFi(WiFiConfigureCallback cb)
 
 void Courier::fireConnectedCallbacks()
 {
-  for (int i = 0; i < _connectedCallbackCount; i++) {
-    if (_connectedCallbacks[i]) _connectedCallbacks[i]();
-  }
+  if (_connectedCallback) _connectedCallback();
 }
 
 void Courier::fireDisconnectedCallbacks()
 {
-  for (int i = 0; i < _disconnectedCallbackCount; i++) {
-    if (_disconnectedCallbacks[i]) _disconnectedCallbacks[i]();
-  }
+  if (_disconnectedCallback) _disconnectedCallback();
 }
 
 void Courier::transitionTo(CourierState newState)
@@ -756,30 +728,22 @@ void Courier::transitionTo(CourierState newState)
 
 void Courier::fireConnectionChangeCallbacks()
 {
-  for (int i = 0; i < _connectionChangeCallbackCount; i++) {
-    if (_connectionChangeCallbacks[i]) _connectionChangeCallbacks[i](_state);
-  }
+  if (_connectionChangeCallback) _connectionChangeCallback(_state);
 }
 
 void Courier::fireWillConnectHooks()
 {
-  for (int i = 0; i < _willConnectHookCount; i++) {
-    if (_willConnectHooks[i]) _willConnectHooks[i]();
-  }
+  if (_willConnectHook) _willConnectHook();
 }
 
 void Courier::fireDidConnectHooks()
 {
-  for (int i = 0; i < _didConnectHookCount; i++) {
-    if (_didConnectHooks[i]) _didConnectHooks[i]();
-  }
+  if (_didConnectHook) _didConnectHook();
 }
 
 void Courier::fireErrorCallbacks(const char* category, const char* message)
 {
-  for (int i = 0; i < _errorCallbackCount; i++) {
-    if (_errorCallbacks[i]) _errorCallbacks[i](category, message);
-  }
+  if (_errorCallback) _errorCallback(category, message);
 }
 
 void Courier::wireTransportCallbacks(CourierTransport* transport)

@@ -51,9 +51,9 @@ Health monitoring checks WiFi and transport status every 5s. Reconnection uses e
 
 ### Key Design Constraints
 
-- Fixed-size arrays throughout (max 4 transports, max 4 callbacks per type) — embedded memory constraints
+- Fixed-size array for transports (max 4). All event callbacks are single-slot (last registration wins, like `ws.onmessage` on the web platform)
 - Single-slot message buffer per transport — minimizes RAM; high-throughput needs custom queuing
-- Messages are JSON with a `"type"` field used for routing to `onMessage()` callbacks
+- Messages are JSON with a `"type"` field used for routing to the `onMessage()` callback
 - `onConfigure()` hooks on transports expose raw ESP-IDF config structs for advanced customization
 - `suspendTransports()`/`resumeTransports()` exist for OTA updates (frees task stacks)
 - Time sync: NTP primary (continuous drift correction via ezTime) + HTTP Date header fallback for cold boot

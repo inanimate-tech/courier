@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.3.0-dev
+
+### Breaking changes
+
+**All event callbacks are now single-slot (last registration wins).** Previously, up to 4 callbacks could be registered per event type via fixed-size arrays. Now each `on*` method is a simple setter — calling it again replaces the previous callback, like `ws.onmessage` on the web platform.
+
+This affects: `onMessage`, `onRawMessage`, `onConnected`, `onDisconnected`, `onConnectionChange`, `onError`, `onTransportsWillConnect`, `onTransportsDidConnect`.
+
+Application frameworks (like Outrun) should take the single slot and expose virtual methods for subclasses to override — the class hierarchy replaces the callback array.
+
+### New features
+
+**Built-in GTS Root R4 TLS certificate for WebSocket transport.** `CourierWSTransport` now includes the Google Trust Services Root R4 CA certificate by default, so connections to Cloudflare-fronted hosts work without manual cert configuration. Use `onConfigure()` to override with a different cert if needed.
+
+**Publish workflow.** Added `tools/publish-preflight.py` and GitHub Actions workflow for publishing to PlatformIO Registry and ESP Component Registry.
+
+### Internal
+
+- Removed `MAX_CALLBACKS` constant (no longer needed).
+- Callback storage reduced from 8 `std::function` arrays + 8 counters to 8 single `std::function` slots.
+- Updated CLAUDE.md, README, and API docs for single-slot semantics.
+
+---
+
 ## v0.2.0
 
 ### Breaking changes
