@@ -139,11 +139,12 @@ void test_on_message_callback() {
     TEST_ASSERT_EQUAL_STRING("test_msg", receivedType.c_str());
 }
 
-void test_on_message_multiple_callbacks() {
+void test_on_message_single_slot() {
     int callCount1 = 0;
     int callCount2 = 0;
 
     courier->onMessage([&](const char* type, JsonDocument& doc) { callCount1++; });
+    // Second registration replaces the first (single-slot, like ws.onmessage)
     courier->onMessage([&](const char* type, JsonDocument& doc) { callCount2++; });
 
     advanceToConnected();
@@ -152,8 +153,8 @@ void test_on_message_multiple_callbacks() {
     mock->simulateTextMessage("{\"type\":\"multi\"}");
     courier->loop();
 
-    TEST_ASSERT_EQUAL(1, callCount1);
-    TEST_ASSERT_EQUAL(1, callCount2);
+    TEST_ASSERT_EQUAL(0, callCount1);  // replaced — never called
+    TEST_ASSERT_EQUAL(1, callCount2);  // last registration wins
 }
 
 void test_on_raw_message_callback() {
@@ -369,7 +370,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_remove_transport);
     RUN_TEST(test_get_transport_unknown);
     RUN_TEST(test_on_message_callback);
-    RUN_TEST(test_on_message_multiple_callbacks);
+    RUN_TEST(test_on_message_single_slot);
     RUN_TEST(test_on_raw_message_callback);
     RUN_TEST(test_send_text_when_connected);
     RUN_TEST(test_send_text_when_disconnected);

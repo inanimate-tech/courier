@@ -144,7 +144,7 @@ courier.builtinWS();    // returns CourierWSTransport&
 
 ### Callbacks
 
-Multiple registrations are supported for each callback type (up to 4 per type).
+All callbacks are single-slot — last registration wins, like `ws.onmessage` on the web platform.
 
 ```cpp
 // JSON messages — type is extracted from the "type" field
@@ -164,7 +164,7 @@ courier.onError([](const char* category, const char* msg) { });
 
 ### Lifecycle hooks
 
-Called in order during state transitions. Use for registration or token exchange before transports connect.
+Single-slot, like event callbacks. Called during state transitions — use for registration or token exchange before transports connect.
 
 ```cpp
 courier.onTransportsWillConnect([]() { });   // before transports start
@@ -340,7 +340,6 @@ These are drained on the main loop by `drainPending()`.
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `MAX_TRANSPORTS` | 4 | Maximum registered transports |
-| `MAX_CALLBACKS` | 4 | Maximum callbacks per event type |
 | `MIN_RECONNECT_INTERVAL` | 5000 ms | Initial backoff delay |
 | `MAX_RECONNECT_INTERVAL` | 60000 ms | Maximum backoff delay |
 | `MAX_RECONNECT_ATTEMPTS` | 10 | Hard limit before `CONNECTION_FAILED` |

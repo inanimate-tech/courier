@@ -89,7 +89,7 @@ public:
   // --- Built-in WS transport accessor ---
   CourierWSTransport& builtinWS() { return _builtinWS; }
 
-  // --- Event callbacks (multiple registrations supported) ---
+  // --- Event callbacks (single-slot, last registration wins) ---
   void onMessage(MessageCallback cb);
   void onRawMessage(RawMessageCallback cb);
   void onConnected(Callback cb);
@@ -97,7 +97,7 @@ public:
   void onConnectionChange(ConnectionChangeCallback cb);
   void onError(ErrorCallback cb);
 
-  // --- Lifecycle hooks (multiple registrations, run in order) ---
+  // --- Lifecycle hooks (single-slot, last registration wins) ---
   void onTransportsWillConnect(Callback cb);
   void onTransportsDidConnect(Callback cb);
 
@@ -174,27 +174,17 @@ private:
   } _reconnect;
   unsigned long calculateBackoffInterval(unsigned int attempts);
 
-  // Callback lists (simple fixed arrays)
-  static constexpr int MAX_CALLBACKS = 4;
+  // Callback storage (all single-slot)
+  MessageCallback _messageCallback;
+  RawMessageCallback _rawMessageCallback;
+  Callback _connectedCallback;
+  Callback _disconnectedCallback;
+  ConnectionChangeCallback _connectionChangeCallback;
+  ErrorCallback _errorCallback;
 
-  MessageCallback _messageCallbacks[MAX_CALLBACKS];
-  int _messageCallbackCount = 0;
-  RawMessageCallback _rawMessageCallbacks[MAX_CALLBACKS];
-  int _rawMessageCallbackCount = 0;
-  Callback _connectedCallbacks[MAX_CALLBACKS];
-  int _connectedCallbackCount = 0;
-  Callback _disconnectedCallbacks[MAX_CALLBACKS];
-  int _disconnectedCallbackCount = 0;
-  ConnectionChangeCallback _connectionChangeCallbacks[MAX_CALLBACKS];
-  int _connectionChangeCallbackCount = 0;
-  ErrorCallback _errorCallbacks[MAX_CALLBACKS];
-  int _errorCallbackCount = 0;
-
-  // Lifecycle hooks
-  Callback _willConnectHooks[MAX_CALLBACKS];
-  int _willConnectHookCount = 0;
-  Callback _didConnectHooks[MAX_CALLBACKS];
-  int _didConnectHookCount = 0;
+  // Lifecycle hooks (single-slot)
+  Callback _willConnectHook;
+  Callback _didConnectHook;
 
   // Health monitoring constants
   static constexpr unsigned long WIFI_CHECK_INTERVAL = 5000;
