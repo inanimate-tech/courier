@@ -34,12 +34,18 @@ public:
     virtual void suspend() {}
     virtual void resume() {}
 
+    virtual bool isPersistent() const { return true; }
+
+    using FailureCallback = std::function<void()>;
+    void setFailureCallback(FailureCallback cb) { _onFailure = cb; }
+
     void setMessageCallback(MessageCallback cb) { _onMessage = cb; }
     void setConnectionCallback(ConnectionCallback cb) { _onConnection = cb; }
 
 protected:
     MessageCallback _onMessage;
     ConnectionCallback _onConnection;
+    FailureCallback _onFailure;
 
     // --- Cross-task pending message buffer ---
     // Transport task writes via queueIncomingMessage/queueConnectionChange.
@@ -51,6 +57,7 @@ protected:
 
     std::atomic<bool> _connChangePending{false};
     std::atomic<bool> _connChangeState{false};
+    std::atomic<bool> _failurePending{false};
 
     // NOTE: Single-slot pending buffer. If the main loop doesn't call loop()
     // fast enough, messages arriving while a previous message is pending will
@@ -80,6 +87,10 @@ protected:
         _connChangePending.store(true, std::memory_order_release);
     }
 
+    void queueTransportFailed() {
+        _failurePending.store(true, std::memory_order_release);
+    }
+
     // Called from loop() on the main task. Fires callbacks if pending.
     void drainPending() {
         if (_msgPending.load(std::memory_order_acquire)) {
@@ -92,6 +103,10 @@ protected:
             bool state = _connChangeState.load(std::memory_order_relaxed);
             _connChangePending.store(false, std::memory_order_release);
             if (_onConnection) _onConnection(this, state);
+        }
+        if (_failurePending.load(std::memory_order_acquire)) {
+            _failurePending.store(false, std::memory_order_release);
+            if (_onFailure) _onFailure();
         }
     }
 };
