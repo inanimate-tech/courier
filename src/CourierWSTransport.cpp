@@ -4,8 +4,10 @@
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include <Arduino.h>
 static const char* TAG = "WSTransport";
 #else
+#include <Arduino.h>
 #include <cstdio>
 #define ESP_LOGI(tag, fmt, ...) printf("[%s] " fmt "\n", tag, ##__VA_ARGS__)
 #define ESP_LOGW(tag, fmt, ...) printf("[%s] WARN: " fmt "\n", tag, ##__VA_ARGS__)
@@ -66,6 +68,7 @@ void CourierWSTransport::freeReassemblyBuf()
 
 void CourierWSTransport::destroyClient()
 {
+    _selfHealActive = false;
     if (_client) {
         esp_websocket_client_stop(_client);
         esp_websocket_client_destroy(_client);
@@ -99,7 +102,7 @@ void CourierWSTransport::begin(const char* host, uint16_t port, const char* path
     // Buffer stays at default 1024. Large messages are fragmented by the
     // library and reassembled in PSRAM by our event handler, keeping
     // internal SRAM free for OTA TLS handshakes.
-    config.disable_auto_reconnect = true;
+    config.disable_auto_reconnect = false;
     config.pingpong_timeout_sec = 20;
     config.task_stack = 8192;
     config.user_context = this;
@@ -116,6 +119,21 @@ void CourierWSTransport::begin(const char* host, uint16_t port, const char* path
 void CourierWSTransport::disconnect()
 {
     destroyClient();
+}
+
+void CourierWSTransport::loop()
+{
+    drainPending();
+
+    if (_selfHealActive) {
+        if (_connected.load(std::memory_order_acquire)) {
+            _selfHealActive = false;
+        } else if (millis() - _disconnectedSinceMillis >= SELF_HEAL_TIMEOUT) {
+            _selfHealActive = false;
+            queueTransportFailed();
+            drainPending();  // Deliver failure callback immediately
+        }
+    }
 }
 
 bool CourierWSTransport::isConnected() const
@@ -169,12 +187,15 @@ void CourierWSTransport::wsEventHandler(void* handler_arg,
         ESP_LOGI(TAG, "Connected");
         self->_connected.store(true, std::memory_order_release);
         self->queueConnectionChange(true);
+        self->_selfHealActive = false;
         break;
 
     case WEBSOCKET_EVENT_DISCONNECTED:
         ESP_LOGI(TAG, "Disconnected");
         self->_connected.store(false, std::memory_order_release);
         self->queueConnectionChange(false);
+        self->_disconnectedSinceMillis = millis();
+        self->_selfHealActive = true;
         break;
 
     case WEBSOCKET_EVENT_DATA: {

@@ -37,9 +37,14 @@ public:
     void suspend() override;
     void resume() override;
 
-    // loop() inherited from base — just calls drainPending()
+    void loop() override;
 
 private:
+    // Self-healing: track disconnect time for failure escalation
+    static constexpr unsigned long SELF_HEAL_TIMEOUT = 60000;  // 60 seconds
+    unsigned long _disconnectedSinceMillis = 0;
+    bool _selfHealActive = false;
+
     const char* _certPem = nullptr;
     bool _useDefaultCerts = true;
     ConfigureCallback _configureCallback;
