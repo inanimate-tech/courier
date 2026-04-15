@@ -31,6 +31,9 @@ Courier::Courier(const CourierConfig& config)
   _builtinWS.setConnectionCallback([this](CourierTransport* t, bool c) {
     handleTransportConnection(t, c);
   });
+  _builtinWS.setFailureCallback([this]() {
+    handleTransportFailure(&_builtinWS);
+  });
 }
 
 Courier::~Courier()
@@ -62,7 +65,6 @@ void Courier::setup()
   // Initialize health monitoring timestamps
   unsigned long now = millis();
   _health.lastWiFiCheckMillis = now;
-  _health.lastTransportCheckMillis = now;
   _reconnect.lastAttemptMillis = now;
 
   transitionTo(COURIER_WIFI_CONNECTING);
@@ -197,6 +199,7 @@ void Courier::handleTransportsConnectingState()
   // begin() starts an async TLS handshake — don't call it again
   // on subsequent loop iterations while waiting for connection.
   if (!_transportsBeginCalled) {
+    clearTransportFailureFlags();
     _transportsBeginCalled = true;
     for (int i = 0; i < _transportCount; i++) {
       TransportEntry& entry = _transports[i];
@@ -266,14 +269,8 @@ void Courier::handleConnectedState()
         fireErrorCallbacks("WIFI", "connection lost");
         _reconnect.disconnectedCallbacksFired = true;
 
-        // Disconnect all transports
-        for (int i = 0; i < _transportCount; i++) {
-          if (_transports[i].transport) {
-            _transports[i].transport->disconnect();
-          }
-        }
+        teardownAllTransports();
         _health.consecutiveWiFiFailures = 0;
-        _health.consecutiveTransportFailures = 0;
         fireDisconnectedCallbacks();
         transitionTo(COURIER_RECONNECTING);
         return;
@@ -286,32 +283,6 @@ void Courier::handleConnectedState()
         Serial.println("[courier] WiFi recovered");
         _health.consecutiveWiFiFailures = 0;
       }
-    }
-  }
-
-  // Transport health monitoring - check every 5 seconds
-  if (now - _health.lastTransportCheckMillis >= TRANSPORT_CHECK_INTERVAL)
-  {
-    _health.lastTransportCheckMillis = now;
-
-    bool anyConnected = isConnected();
-
-    if (_health.consecutiveTransportFailures >= MAX_TRANSPORT_FAILURES && !anyConnected)
-    {
-      Serial.println("[courier] Persistent transport failures - entering reconnection state");
-      fireErrorCallbacks("TRANSPORT", "health check failed");
-      _reconnect.disconnectedCallbacksFired = true;
-
-      // Disconnect all transports
-      for (int i = 0; i < _transportCount; i++) {
-        if (_transports[i].transport) {
-          _transports[i].transport->disconnect();
-        }
-      }
-      _health.consecutiveTransportFailures = 0;
-      fireDisconnectedCallbacks();
-      transitionTo(COURIER_RECONNECTING);
-      return;
     }
   }
 
@@ -373,12 +344,7 @@ void Courier::handleReconnectingState()
 
   // WiFi is good, retry transports - go back through WIFI_CONNECTED to re-run hooks
   Serial.println("[courier] WiFi OK - transitioning to WIFI_CONNECTED");
-  // Disconnect transports before re-connecting
-  for (int i = 0; i < _transportCount; i++) {
-    if (_transports[i].transport) {
-      _transports[i].transport->disconnect();
-    }
-  }
+  teardownAllTransports();
   transitionTo(COURIER_WIFI_CONNECTED);
 }
 
@@ -487,8 +453,6 @@ bool Courier::syncTimeFromHttpDate()
 
 void Courier::handleTransportMessage(const char* payload, size_t length)
 {
-  _health.consecutiveTransportFailures = 0;
-
   // Fire raw message callback
   if (_rawMessageCallback) _rawMessageCallback(payload, length);
 
@@ -511,12 +475,10 @@ void Courier::handleTransportConnection(CourierTransport* transport, bool connec
 {
   if (connected) {
     Serial.printf("[courier] %s connected\n", transport->name());
-    _health.consecutiveTransportFailures = 0;
     _reconnect.attempts = 0;
     _reconnect.currentInterval = MIN_RECONNECT_INTERVAL;
   } else {
     Serial.printf("[courier] %s disconnected\n", transport->name());
-    _health.consecutiveTransportFailures++;
   }
 }
 
@@ -561,6 +523,7 @@ void Courier::removeTransport(const char* name)
       _transports[i].name = nullptr;
       _transports[i].transport = nullptr;
       _transports[i].endpoint = CourierEndpoint{};
+      _transports[i].failed = false;
       return;
     }
   }
@@ -754,6 +717,60 @@ void Courier::wireTransportCallbacks(CourierTransport* transport)
   transport->setConnectionCallback([this](CourierTransport* t, bool c) {
     handleTransportConnection(t, c);
   });
+  transport->setFailureCallback([this, transport]() {
+    handleTransportFailure(transport);
+  });
+}
+
+// --- Transport failure escalation ---
+
+void Courier::handleTransportFailure(CourierTransport* transport)
+{
+  for (int i = 0; i < _transportCount; i++) {
+    if (_transports[i].transport == transport) {
+      _transports[i].failed = true;
+      Serial.printf("[courier] Transport '%s' reported failure\n", _transports[i].name);
+      break;
+    }
+  }
+
+  if (_state == COURIER_CONNECTED && allPersistentTransportsFailed()) {
+    Serial.println("[courier] All persistent transports failed — escalating");
+    fireErrorCallbacks("TRANSPORT", "all persistent transports failed");
+    _reconnect.disconnectedCallbacksFired = true;
+    teardownAllTransports();
+    fireDisconnectedCallbacks();
+    transitionTo(COURIER_RECONNECTING);
+  }
+}
+
+bool Courier::allPersistentTransportsFailed() const
+{
+  bool anyPersistent = false;
+  for (int i = 0; i < _transportCount; i++) {
+    if (_transports[i].transport && _transports[i].transport->isPersistent()) {
+      anyPersistent = true;
+      if (!_transports[i].failed) return false;
+    }
+  }
+  return anyPersistent;
+}
+
+void Courier::clearTransportFailureFlags()
+{
+  for (int i = 0; i < _transportCount; i++) {
+    _transports[i].failed = false;
+  }
+}
+
+void Courier::teardownAllTransports()
+{
+  for (int i = 0; i < _transportCount; i++) {
+    if (_transports[i].transport) {
+      _transports[i].transport->disconnect();
+    }
+  }
+  clearTransportFailureFlags();
 }
 
 // --- Backoff ---

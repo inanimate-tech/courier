@@ -16,11 +16,25 @@ Application frameworks (like Outrun) should take the single slot and expose virt
 
 **Publish workflow.** Added `tools/publish-preflight.py` and GitHub Actions workflow for publishing to PlatformIO Registry and ESP Component Registry.
 
+**UDP multicast transport.** New `CourierUDPTransport` class for local network discovery and messaging via multicast UDP. Non-persistent by default (does not participate in failure escalation). Uses `AsyncUDP` under the hood. The `host` parameter to `begin()` is the multicast group address; `path` is ignored. ([#1](https://github.com/inanimate-tech/courier/issues/1))
+
+**Transport self-healing.** WebSocket and MQTT transports now use ESP-IDF's built-in auto-reconnect (`disable_auto_reconnect = false`) instead of Courier-level reconnection. Each transport tracks its disconnect time and, if it fails to reconnect within 60 seconds, reports failure via `queueTransportFailed()`. This replaces the previous aggregate health-check polling approach with per-transport timers.
+
+**Transport failure escalation.** When all *persistent* transports report failure, Courier tears down all transports and transitions to `RECONNECTING`, which re-runs WiFi checks and the full transport connection sequence. Non-persistent transports (like UDP) are excluded from this check.
+
+**`isPersistent()` on `CourierTransport`.** New virtual method (default: `true`) that controls whether a transport participates in failure escalation. `CourierUDPTransport` returns `false` since local multicast does not indicate server reachability.
+
+**`queueTransportFailed()` / `setFailureCallback()` on `CourierTransport`.** Transports can now report unrecoverable failure to Courier. `queueTransportFailed()` sets an atomic flag drained by `drainPending()`, which fires the failure callback registered by Courier via `setFailureCallback()`.
+
 ### Internal
 
 - Removed `MAX_CALLBACKS` constant (no longer needed).
 - Callback storage reduced from 8 `std::function` arrays + 8 counters to 8 single `std::function` slots.
 - Updated CLAUDE.md, README, and API docs for single-slot semantics.
+- MQTT `disconnect()` now calls `destroyClient()` for full teardown (stop + destroy + state reset), matching the WS transport pattern.
+- Removed aggregate transport health check polling from `handleConnectedState()` — replaced by per-transport self-healing timers.
+- Added `TransportEntry.failed` flag, `handleTransportFailure()`, `allPersistentTransportsFailed()`, `clearTransportFailureFlags()`, and `teardownAllTransports()` to `Courier`.
+- Courier constructor now wires failure callbacks on the built-in WS transport; `wireTransportCallbacks()` wires them on added transports.
 
 ---
 

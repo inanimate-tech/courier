@@ -63,9 +63,14 @@ public:
     // Publish with explicit QoS and retain control.
     bool publish(const char* topic, const char* payload, int qos, bool retain);
 
-    // loop() inherited from base — just calls drainPending()
+    void loop() override;
 
 private:
+    // Self-healing: track disconnect time for failure escalation
+    static constexpr unsigned long SELF_HEAL_TIMEOUT = 60000;  // 60 seconds
+    unsigned long _disconnectedSinceMillis = 0;
+    bool _selfHealActive = false;
+
     const char* _certPem = nullptr;
     ConfigureCallback _configureCallback;
 

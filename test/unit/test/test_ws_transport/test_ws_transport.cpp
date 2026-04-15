@@ -54,7 +54,7 @@ void test_begin_sets_config_defaults() {
     ws->begin("host", 443, "/path");
     auto* client = MockWebSocketClient::lastInstance();
     TEST_ASSERT_FALSE(client->cert_pem.empty());
-    TEST_ASSERT_TRUE(client->disable_auto_reconnect);
+    TEST_ASSERT_FALSE(client->disable_auto_reconnect);  // auto-reconnect enabled for self-healing
     TEST_ASSERT_EQUAL(20, client->pingpong_timeout_sec);
 }
 

@@ -118,6 +118,7 @@ private:
     const char* name = nullptr;
     CourierTransport* transport = nullptr;
     CourierEndpoint endpoint;
+    bool failed = false;
   };
   TransportEntry _transports[MAX_TRANSPORTS];
   int _transportCount = 0;
@@ -159,9 +160,7 @@ private:
   // Health monitoring
   struct HealthState {
     unsigned long lastWiFiCheckMillis = 0;
-    unsigned long lastTransportCheckMillis = 0;
     unsigned int consecutiveWiFiFailures = 0;
-    unsigned int consecutiveTransportFailures = 0;
     unsigned long lastErrorLogMillis = 0;
   } _health;
 
@@ -189,8 +188,6 @@ private:
   // Health monitoring constants
   static constexpr unsigned long WIFI_CHECK_INTERVAL = 5000;
   static constexpr uint8_t MAX_WIFI_FAILURES = 3;
-  static constexpr unsigned long TRANSPORT_CHECK_INTERVAL = 5000;
-  static constexpr uint8_t MAX_TRANSPORT_FAILURES = 3;
 
   // Transport connection timeout
   static constexpr unsigned long TRANSPORT_CONNECTION_TIMEOUT = 30000;
@@ -216,6 +213,12 @@ private:
 
   // Wire message/connection callbacks onto a transport
   void wireTransportCallbacks(CourierTransport* transport);
+
+  // Transport failure escalation
+  void handleTransportFailure(CourierTransport* transport);
+  bool allPersistentTransportsFailed() const;
+  void clearTransportFailureFlags();
+  void teardownAllTransports();
 
   // Transports connecting state tracking
   unsigned long _transportsConnectingStartMillis = 0;

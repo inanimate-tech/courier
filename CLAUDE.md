@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Courier is a batteries-included JSON messaging library for ESP32. It manages WiFi (captive portal via WiFiManager), WebSocket and MQTT transports, reconnection with exponential backoff, and NTP/HTTP time synchronization. The opinionated stack bundles ArduinoJson 7, ezTime, WiFiManager, and ESP-IDF's built-in WebSocket/MQTT clients.
+Courier is a batteries-included JSON messaging library for ESP32. It manages WiFi (captive portal via WiFiManager), WebSocket, MQTT, and UDP multicast transports, self-healing reconnection with exponential backoff, and NTP/HTTP time synchronization. The opinionated stack bundles ArduinoJson 7, ezTime, WiFiManager, and ESP-IDF's built-in WebSocket/MQTT clients.
 
 ## Build System
 
@@ -39,14 +39,15 @@ BOOTING → WIFI_CONNECTING → WIFI_CONNECTED → TRANSPORTS_CONNECTING → CON
                                               CONNECTION_FAILED
 ```
 
-Health monitoring checks WiFi and transport status every 5s. Reconnection uses exponential backoff (5s–60s) with a hard limit of 10 attempts.
+WiFi health monitoring checks status every 5s. Transport self-healing: WS and MQTT use ESP-IDF auto-reconnect; if a transport stays disconnected for 60s it reports failure. When all persistent transports fail, Courier escalates to full WiFi reconnection. Reconnection uses exponential backoff (5s-60s) with a hard limit of 10 attempts.
 
 ### Core Classes (all in `src/`)
 
-- **Courier** (`Courier.h/.cpp`): Main class. Singleton (WiFiManager requires static callbacks). Manages the state machine, transport registry (max 4 named transports), callback dispatch, WiFi, and time sync. A built-in WebSocket transport is always registered as `"ws"`.
-- **CourierTransport** (`CourierTransport.h`): Abstract base for pluggable transports. Defines `begin()`, `disconnect()`, `loop()`, `isConnected()`, `send()`/`sendBinary()`/`publish()`. Uses a single-slot atomic pending message buffer for cross-task delivery (drops if previous still pending).
-- **CourierWSTransport** (`CourierWSTransport.h/.cpp`): WebSocket transport wrapping `esp_websocket_client`. Supports TLS, custom headers via `onConfigure()`, PSRAM reassembly buffer for fragmented messages.
-- **CourierMqttTransport** (`CourierMqttTransport.h/.cpp`): MQTT transport wrapping `esp_mqtt_client`. Dynamic topic subscription, QoS/retain support, configurable client ID. Handles both ESP-IDF v4.x (flat config) and v5.x (nested struct) differences.
+- **Courier** (`Courier.h/.cpp`): Main class. Singleton (WiFiManager requires static callbacks). Manages the state machine, transport registry (max 4 named transports), callback dispatch, WiFi, time sync, and failure escalation. A built-in WebSocket transport is always registered as `"ws"`.
+- **CourierTransport** (`CourierTransport.h`): Abstract base for pluggable transports. Defines `begin()`, `disconnect()`, `loop()`, `isConnected()`, `send()`/`sendBinary()`/`publish()`, `isPersistent()`. Uses a single-slot atomic pending message buffer for cross-task delivery (drops if previous still pending). Supports failure reporting via `queueTransportFailed()`/`setFailureCallback()`.
+- **CourierWSTransport** (`CourierWSTransport.h/.cpp`): WebSocket transport wrapping `esp_websocket_client`. Supports TLS, custom headers via `onConfigure()`, PSRAM reassembly buffer for fragmented messages. Self-healing via ESP-IDF auto-reconnect with 60s failure timeout.
+- **CourierMqttTransport** (`CourierMqttTransport.h/.cpp`): MQTT transport wrapping `esp_mqtt_client`. Dynamic topic subscription, QoS/retain support, configurable client ID. Handles both ESP-IDF v4.x (flat config) and v5.x (nested struct) differences. Self-healing via ESP-IDF auto-reconnect with 60s failure timeout. `disconnect()` does full `destroyClient()` teardown.
+- **CourierUDPTransport** (`CourierUDPTransport.h/.cpp`): Multicast UDP transport wrapping `AsyncUDP`. Non-persistent (`isPersistent()` returns `false`) — does not participate in failure escalation. The `host` parameter is the multicast group address; `path` is ignored.
 - **CourierEndpoint** (`CourierEndpoint.h`): Simple struct holding host/port/path/TLS config for a transport endpoint.
 
 ### Key Design Constraints
