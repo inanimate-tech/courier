@@ -5,11 +5,13 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_idf_version.h"
+#include <Arduino.h>
 // ESP-IDF v5.x restructured esp_mqtt_client_config_t into nested sub-structs.
 // Arduino framework (PlatformIO) bundles ESP-IDF v4.4.x with flat fields.
 #define MQTT_CONFIG_V5 (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
 static const char* TAG = "MqttTransport";
 #else
+#include <Arduino.h>
 #include <cstdio>
 #define ESP_LOGI(tag, fmt, ...) printf("[%s] " fmt "\n", tag, ##__VA_ARGS__)
 #define ESP_LOGW(tag, fmt, ...) printf("[%s] WARN: " fmt "\n", tag, ##__VA_ARGS__)
@@ -61,6 +63,7 @@ void CourierMqttTransport::destroyClient()
     }
     freeReassemblyBuf();
     _connected.store(false, std::memory_order_release);
+    _selfHealActive = false;
 }
 
 void CourierMqttTransport::subscribeAll()
@@ -134,7 +137,6 @@ void CourierMqttTransport::begin(const char* host, uint16_t port, const char* pa
         config.broker.verification.certificate = _certPem;
     }
     config.credentials.client_id = _configClientId.empty() ? nullptr : _configClientId.c_str();
-    config.network.disable_auto_reconnect = true;
     config.task.stack_size = 8192;
 #else
     config.uri = uri.c_str();
@@ -142,7 +144,6 @@ void CourierMqttTransport::begin(const char* host, uint16_t port, const char* pa
         config.cert_pem = _certPem;
     }
     config.client_id = _configClientId.empty() ? nullptr : _configClientId.c_str();
-    config.disable_auto_reconnect = true;
     config.task_stack = 8192;
     config.user_context = this;
 #endif
@@ -158,10 +159,8 @@ void CourierMqttTransport::begin(const char* host, uint16_t port, const char* pa
 
 void CourierMqttTransport::disconnect()
 {
-    if (_client) {
-        esp_mqtt_client_stop(_client);
-    }
-    _connected.store(false, std::memory_order_release);
+    destroyClient();
+    _selfHealActive = false;
 }
 
 bool CourierMqttTransport::isConnected() const
@@ -176,6 +175,20 @@ bool CourierMqttTransport::send(const char* payload)
     int result = esp_mqtt_client_publish(_client, _defaultPublishTopic.c_str(),
                                           payload, 0, 0, 0);
     return result >= 0;
+}
+
+void CourierMqttTransport::loop()
+{
+    drainPending();
+    if (_selfHealActive) {
+        if (_connected.load(std::memory_order_acquire)) {
+            _selfHealActive = false;
+        } else if (millis() - _disconnectedSinceMillis >= SELF_HEAL_TIMEOUT) {
+            _selfHealActive = false;
+            queueTransportFailed();
+            drainPending();  // Deliver failure callback immediately
+        }
+    }
 }
 
 void CourierMqttTransport::suspend()
@@ -213,12 +226,15 @@ void CourierMqttTransport::mqttEventHandler(void* handler_arg,
         self->subscribeAll();
 
         self->queueConnectionChange(true);
+        self->_selfHealActive = false;
         break;
 
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGI(TAG, "Disconnected");
         self->_connected.store(false, std::memory_order_release);
         self->queueConnectionChange(false);
+        self->_disconnectedSinceMillis = millis();
+        self->_selfHealActive = true;
         break;
 
     case MQTT_EVENT_DATA: {
