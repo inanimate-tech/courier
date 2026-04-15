@@ -5,7 +5,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_idf_version.h"
-#include <Arduino.h>
+#include "esp32-hal.h"  // millis() — Arduino.h conflicts with IDF mqtt/lwip headers
 // ESP-IDF v5.x restructured esp_mqtt_client_config_t into nested sub-structs.
 // Arduino framework (PlatformIO) bundles ESP-IDF v4.4.x with flat fields.
 #define MQTT_CONFIG_V5 (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))

@@ -4,7 +4,7 @@
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
 #include "esp_heap_caps.h"
-#include <Arduino.h>
+#include "esp32-hal.h"  // millis() — Arduino.h conflicts with IDF websocket/lwip headers
 static const char* TAG = "WSTransport";
 #else
 #include <Arduino.h>
