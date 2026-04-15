@@ -1,6 +1,6 @@
 # courier
 
-Batteries-included JSON messaging for ESP32. WiFi and user configuration, WebSocket, MQTT, reconnection — all handled.
+Batteries-included JSON messaging for ESP32. WiFi and user configuration, WebSocket, MQTT, UDP multicast, self-healing reconnection — all handled.
 
 > [!WARNING]
 > Courier is under active development so the API surface will change. See [docs/changelog.md](docs/changelog.md) for changes on each release.
@@ -36,8 +36,10 @@ void loop() { courier.loop(); }
 ## What it does
 
 - **WiFi** — captive portal config via WiFiManager, auto-reconnection
-- **WebSocket** — built-in transport with TLS, ping/pong heartbeat
-- **MQTT** — opt-in transport with subscribe/unsubscribe, topic-addressed publishing
+- **WebSocket** — built-in transport with TLS, ping/pong heartbeat, self-healing auto-reconnect
+- **MQTT** — opt-in transport with subscribe/unsubscribe, topic-addressed publishing, self-healing auto-reconnect
+- **UDP multicast** — opt-in transport for local network discovery and messaging
+- **Self-healing** — transports auto-reconnect independently; if all persistent transports fail after 60s, Courier escalates to full WiFi reconnection
 - **Reconnection** — exponential backoff (5s-60s), health monitoring, automatic recovery
 - **Time sync** — NTP primary (continuous drift correction) + HTTP Date header fallback
 - **JSON routing** — messages parsed and dispatched by `type` field

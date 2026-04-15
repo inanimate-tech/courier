@@ -1,5 +1,5 @@
 version: "0.3.0-dev"
-description: "Batteries-included ESP32 connectivity library — WiFi, WebSocket, MQTT, reconnection, all handled"
+description: "Batteries-included JSON messaging for ESP32 — WiFi, WebSocket, MQTT, UDP multicast, self-healing reconnection, all handled"
 url: "https://github.com/inanimate-tech/courier"
 repository: "https://github.com/inanimate-tech/courier.git"
 targets:

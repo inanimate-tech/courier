@@ -298,6 +298,36 @@ courier.setEndpoint("mqtt", ep);
 
 ---
 
+## UDP Transport
+
+```cpp
+#include <CourierUDPTransport.h>
+
+CourierUDPTransport udp;
+courier.addTransport("udp", &udp);
+
+CourierEndpoint ep;
+ep.host = "239.1.2.3";   // Multicast group address
+ep.port = 5000;           // path is ignored for UDP
+courier.setEndpoint("udp", ep);
+```
+
+`CourierUDPTransport` joins a multicast group and delivers received packets as messages. It is **non-persistent** (`isPersistent()` returns `false`), so it does not participate in failure escalation — a UDP transport going down will not trigger a WiFi reconnect.
+
+Uses `AsyncUDP` under the hood. The `host` parameter is the multicast group address; `path` is ignored.
+
+---
+
+## Transport Self-Healing
+
+WebSocket and MQTT transports use ESP-IDF's built-in auto-reconnect. When a transport disconnects, the underlying library attempts to reconnect automatically. Each transport tracks its disconnect time and, if auto-reconnect fails to restore the connection within 60 seconds, reports failure to Courier via the failure callback.
+
+When all *persistent* transports have reported failure, Courier tears down all transports and transitions to `RECONNECTING`. This re-runs WiFi checks and the full connection sequence (including `onTransportsWillConnect` hooks like registration).
+
+Non-persistent transports (like UDP) are excluded from the "all failed" check.
+
+---
+
 ## Custom Transports
 
 Subclass `CourierTransport` to implement a custom transport:
@@ -321,6 +351,7 @@ Optional overrides:
 | `sendBinary(data, len)` | returns `false` | Binary send support |
 | `publish(topic, payload)` | calls `send(payload)` | Topic-addressed send |
 | `topicRequired()` | returns `false` | If true, `send()` on Courier uses the default topic |
+| `isPersistent()` | returns `true` | If false, transport is excluded from failure escalation |
 | `suspend()` | no-op | Free resources for OTA |
 | `resume()` | no-op | Restore after OTA |
 
@@ -329,6 +360,7 @@ From your transport's event handler (which may run on a different task), use the
 ```cpp
 queueIncomingMessage(payload, len);     // queue a received message
 queueConnectionChange(true);            // queue a connection state change
+queueTransportFailed();                 // report unrecoverable failure to Courier
 ```
 
 These are drained on the main loop by `drainPending()`.
