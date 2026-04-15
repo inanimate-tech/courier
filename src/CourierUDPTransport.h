@@ -1,0 +1,37 @@
+#ifndef COURIER_UDP_TRANSPORT_H
+#define COURIER_UDP_TRANSPORT_H
+
+#include "CourierTransport.h"
+#include <atomic>
+#include <string>
+
+#ifdef ESP_PLATFORM
+#include <AsyncUDP.h>
+#else
+#include <AsyncUDP.h>  // Mock for native tests
+#endif
+
+class CourierUDPTransport : public CourierTransport {
+public:
+    CourierUDPTransport();
+    ~CourierUDPTransport();
+
+    void begin(const char* host, uint16_t port, const char* path) override;
+    void disconnect() override;
+    bool isConnected() const override;
+    bool send(const char* payload) override;
+    const char* name() const override { return "UDP"; }
+
+    bool isPersistent() const override { return false; }
+
+private:
+    AsyncUDP _udp;
+    std::atomic<bool> _joined{false};
+    std::string _multicastHost;
+    uint16_t _multicastPort = 0;
+
+    void joinMulticast();
+    void leaveMulticast();
+};
+
+#endif // COURIER_UDP_TRANSPORT_H
