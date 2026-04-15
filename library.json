@@ -1,8 +1,8 @@
 {
   "name": "courier",
-  "version": "0.3.0-dev",
-  "description": "Batteries-included JSON messaging for ESP32 — WiFi, WebSocket, MQTT, reconnection, all handled",
-  "keywords": "esp32, websocket, mqtt, wifi, connectivity, iot, reconnection",
+  "version": "0.4.0-dev",
+  "description": "Batteries-included JSON messaging for ESP32 — WiFi, WebSocket, MQTT, UDP multicast, self-healing reconnection, all handled",
+  "keywords": "esp32, websocket, mqtt, udp, wifi, connectivity, iot, reconnection",
   "repository": {
     "type": "git",
     "url": "https://github.com/inanimate-tech/courier.git"
