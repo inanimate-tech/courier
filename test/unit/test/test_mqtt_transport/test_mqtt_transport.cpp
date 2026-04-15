@@ -101,7 +101,7 @@ void test_begin_no_cert_by_default_and_disables_auto_reconnect() {
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
     TEST_ASSERT_TRUE(client->cert_pem.empty());
-    TEST_ASSERT_TRUE(client->disable_auto_reconnect);
+    TEST_ASSERT_FALSE(client->disable_auto_reconnect);  // auto-reconnect enabled for self-healing
 }
 
 void test_subscribes_to_configured_topics() {
