@@ -63,6 +63,16 @@ Courier bundles a number of other great libraries:
 
 Use `onConfigure` hooks to access the full configuration surface of each bundled library.
 
+## Licenses
+
+Courier itself is MIT. Its bundled dependencies carry their own (permissive) licenses:
+
+- WiFiManager, ArduinoJson, ezTime — MIT
+- esp_websocket_client, esp_mqtt_client, ESP-IDF — Apache 2.0
+- arduino-esp32 — LGPL 2.1+
+
+When you ship firmware built with Courier, those libraries ship with it. Follow each library's notice/attribution requirements as applicable — in particular arduino-esp32's LGPL terms around relinking if you statically link it into a closed-source binary.
+
 ## Install
 
 ### PlatformIO

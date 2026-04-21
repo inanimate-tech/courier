@@ -3,6 +3,11 @@ CONFIG_FREERTOS_HZ=1000
 # Leave CONFIG_AUTOSTART_ARDUINO unset so the example's app_main() is the
 # entry point instead of Arduino's setup()/loop() wrapper.
 
+# Custom 3 MB app partition — the arduino-esp32 runtime plus courier's
+# transports overflow the default 1 MB slot.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
 # Broaden TLS cipher support (WebSocket/MQTT transport helpers)
 CONFIG_MBEDTLS_PSK_MODES=y
 CONFIG_MBEDTLS_KEY_EXCHANGE_PSK=y
