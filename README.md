@@ -2,12 +2,18 @@
 
 Batteries-included JSON messaging for ESP32. WiFi and user configuration, WebSocket, MQTT, UDP multicast, self-healing reconnection — all handled.
 
-> [!WARNING]
+> [!IMPORTANT]
 > Courier is under active development so the API surface will change. See [docs/changelog.md](docs/changelog.md) for changes on each release.
 
 Motivation: When you make something neat on your [M5Stick](https://shop.m5stack.com/products/m5stickc-plus2-esp32-mini-iot-development-kit?variant=44269818216705) you want the quickest path to messaging the back-end, and you want to carry it to places to show people and configure the Wi-Fi from your phone. Courier is how you do that.
 
 Courier expects JSON messages with a `"type"` field. Messages are parsed with ArduinoJson and the `type` string is passed to the `onMessage` callback alongside the parsed document. Use `onRawMessage` for non-JSON or custom framing.
+
+## Quick Start
+
+1. Bring up your hardware as normal with Arduino or ESP-IDF.
+2. Install Courier (see below; we recommend managing your libraries with [PlatformIO](https://platformio.org)).
+3. Initialize Courier with a config struct, set up your callbacks, and call `setup()` and `loop()`.
 
 ```cpp
 #include <Courier.h>
@@ -65,11 +71,11 @@ Use `onConfigure` hooks to access the full configuration surface of each bundled
 ```ini
 lib_deps = https://github.com/inanimate-tech/courier.git
 ```
-Or to pin a version: `https://github.com/inanimate-tech/courier.git#v0.2.0`
+Or to pin a version: `https://github.com/inanimate-tech/courier.git#v0.3.0`
 
 **From the PlatformIO registry** (for stable versions):
 ```ini
-lib_deps = inanimate/courier@0.2.0
+lib_deps = inanimate/courier@0.3.0
 ```
 
 ### ESP-IDF Component
@@ -80,7 +86,7 @@ dependencies:
   inanimate-tech/courier:
     git: https://github.com/inanimate-tech/courier.git
 ```
-Or to pin a version, add `version: v0.2.0`
+Or to pin a version, add `version: v0.3.0`
 
 **From the ESP Component Registry** (for stable versions):
 ```yml
