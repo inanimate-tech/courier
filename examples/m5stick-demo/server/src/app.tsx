@@ -2,7 +2,6 @@ import { useState, useCallback } from "react";
 import { useAgent } from "agents/react";
 
 const DEVICE_ID = "m5stick-demo";
-const AGENT_URL = `/agents/device-agent/${DEVICE_ID}`;
 
 export default function App() {
   const [deviceConnected, setDeviceConnected] = useState(false);
@@ -10,7 +9,7 @@ export default function App() {
   const [lastSent, setLastSent] = useState("");
   const [sending, setSending] = useState(false);
 
-  useAgent({
+  const agent = useAgent({
     agent: "DeviceAgent",
     name: DEVICE_ID,
     query: { monitor: "1" },
@@ -19,7 +18,7 @@ export default function App() {
         const data = JSON.parse(String(event.data));
         if (data.type === "status") {
           setDeviceConnected(data.deviceConnected);
-        } else if (data.type === "text") {
+        } else if (data.type === "message") {
           setLastSent(data.text);
         }
       } catch {
@@ -32,26 +31,19 @@ export default function App() {
     if (!text.trim() || sending) return;
     setSending(true);
     try {
-      const res = await fetch(AGENT_URL, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain" },
-        body: text
-      });
-      if (!res.ok) {
-        console.error("Failed to send text:", res.status);
-      }
+      await agent.call("sendMessage", [text]);
     } catch (err) {
       console.error("Failed to send text:", err);
     } finally {
       setSending(false);
     }
-  }, [text, sending]);
+  }, [agent, text, sending]);
 
   return (
     <div className="min-h-screen bg-gray-50 p-8">
       <div className="max-w-2xl mx-auto space-y-6">
         <h1 className="text-2xl font-bold text-gray-900">
-          M5Stick Text Broadcaster
+          M5Stick Text Sender
         </h1>
 
         <div className="flex items-center gap-2 text-sm text-gray-600">

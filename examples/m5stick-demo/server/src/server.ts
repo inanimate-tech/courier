@@ -1,4 +1,4 @@
-import { Agent, routeAgentRequest } from "agents";
+import { Agent, callable, routeAgentRequest } from "agents";
 import type { Connection, ConnectionContext } from "agents";
 
 export class DeviceAgent extends Agent<Env> {
@@ -40,10 +40,19 @@ export class DeviceAgent extends Agent<Env> {
     if (request.method !== "POST") {
       return new Response("Method not allowed", { status: 405 });
     }
-
     const text = await request.text();
-    const message = JSON.stringify({ type: "text", text });
+    this.broadcastMessage(text);
+    return Response.json({ ok: true });
+  }
 
+  @callable()
+  async sendMessage(text: string): Promise<{ ok: true }> {
+    this.broadcastMessage(text);
+    return { ok: true };
+  }
+
+  private broadcastMessage(text: string): void {
+    const message = JSON.stringify({ type: "message", text });
     let deviceCount = 0;
     for (const conn of this.getConnections("device")) {
       conn.send(message);
@@ -54,9 +63,7 @@ export class DeviceAgent extends Agent<Env> {
       conn.send(message);
       monitorCount++;
     }
-    console.log(`Sent text to ${deviceCount} device(s) and ${monitorCount} monitor(s)`);
-
-    return Response.json({ ok: true });
+    console.log(`Sent message to ${deviceCount} device(s) and ${monitorCount} monitor(s)`);
   }
 
   private broadcastStatus(): void {

@@ -20,6 +20,7 @@ First [install the PlatformIO CLI](https://docs.platformio.org/en/stable/core/in
 
 ```bash
 cd device
+pio run -t clean
 pio run -t upload
 pio device monitor
 ```
@@ -32,10 +33,10 @@ The screen shows `Connecting...` until it joins Wi-Fi and the server, then `Conn
 
 ### Message format
 
-The device listens for JSON messages of type `text`:
+The device listens for JSON messages of type `message`:
 
 ```json
-{ "type": "text", "text": "hello, world" }
+{ "type": "message", "text": "Hello, World!" }
 ```
 
 ## Server
@@ -66,5 +67,5 @@ Then update `cfg.host` in `device/src/main.cpp` to your deployed Worker's hostna
 ```bash
 curl -X POST -H "Content-Type: text/plain" \
   --data "hello from the command line" \
-  https://your-worker.workers.dev/agents/device-agent/m5stick-demo
+  https://m5stick-demo.YOUR-WORKER.workers.dev/agents/device-agent/m5stick-demo
 ```
