@@ -202,7 +202,10 @@ courier.builtinWS().onConfigure([](esp_websocket_client_config_t& cfg) {
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `cert_pem` | `const char*` | `nullptr` | TLS certificate PEM string (`nullptr` = no cert set by Courier) |
+| `cert_pem` | `const char*` | `nullptr` | Specific CA cert in PEM format (overrides the default bundle) |
+| `use_default_certs` | `bool` | `true` | Use Courier's built-in GTS Root R4 certificate for TLS connections |
+
+Call `useDefaultCerts()` at runtime to opt into the built-in cert after construction.
 
 ---
 
