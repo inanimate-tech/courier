@@ -21,7 +21,7 @@ extern "C" void app_main() {
     mqtt.setClientId("my-device-001");
 
     courier.onConnected([]() {
-        courier.send("{\"type\":\"hello\"}");
+        courier.send(R"({"type":"hello"})");
     });
 
     courier.onMessage([](const char* type, JsonDocument& doc) {

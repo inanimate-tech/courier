@@ -29,7 +29,7 @@ CourierConfig makeConfig() {
 Courier courier(makeConfig());
 
 void setup() {
-  courier.onConnected([]() { courier.send("{\"type\":\"hello\"}"); });
+  courier.onConnected([]() { courier.send(R"({"type":"hello"})"); });
   courier.onMessage([](const char* type, JsonDocument& doc) {
     Serial.printf("Got: %s\n", type);
   });

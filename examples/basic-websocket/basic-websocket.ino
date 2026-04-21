@@ -15,7 +15,7 @@ void setup() {
 
   courier.onConnected([]() {
     Serial.println("Connected!");
-    courier.send("{\"type\":\"hello\",\"msg\":\"world\"}");
+    courier.send(R"({"type":"hello","msg":"world"})");
   });
 
   courier.onDisconnected([]() {
