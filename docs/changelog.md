@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.1
+
+### Fixes
+
+- Courier builds correctly for ESP-IDF.
+- `examples/espidf-basic` builds correctly.
+
+### New
+
+- `examples/m5stick-demo`: firmware and Cloudflare server for M5StickC Plus2 and M5StickC S3.
+
+---
+
 ## v0.3.0
 
 ### Breaking changes
