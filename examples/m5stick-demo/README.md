@@ -17,7 +17,7 @@ m5stick-demo/
 Two M5Stick variants are supported:
 
 - **M5StickC Plus2** (yellow, most popular) — ESP32-PICO-V3-02, CH9102 USB-UART bridge. This is the default.
-- **M5StickC S3** (grey, newer) — ESP32-S3 with native USB.
+- **M5StickS3** (grey, newer) — ESP32-S3 with native USB.
 
 ### Build & Flash
 
