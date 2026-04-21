@@ -12,3 +12,27 @@ dependencies:
     version: ">=4.4.0"
   espressif/esp_websocket_client:
     version: "^1.0.0"
+files:
+  # compote does not read .gitignore — we must explicitly exclude build
+  # artifacts and dev-only files, or they end up in the published tarball.
+  exclude:
+    - "**/.pio/**/*"
+    - "**/node_modules/**/*"
+    - "**/managed_components/**/*"
+    - "**/build/**/*"
+    - "dist/**/*"
+    - "examples/**/*"
+    - ".claude/**/*"
+    - ".github/**/*"
+    - ".vscode/**/*"
+    - "docs/superpowers/**/*"
+    - "tools/**/*"
+    - "test/**/*"
+    - "**/.DS_Store"
+    - "**/package-lock.json"
+    - "**/sdkconfig"
+    - "**/sdkconfig.*"
+    - "**/dependencies.lock"
+    - "CLAUDE.md"
+    - "docs/publishing.md"
+    - ".gitignore"
