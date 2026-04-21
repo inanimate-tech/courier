@@ -9,7 +9,7 @@
 
 ### New
 
-- `examples/m5stick-demo`: firmware and Cloudflare server for M5StickC Plus2 and M5StickC S3.
+- `examples/m5stick-demo`: firmware and Cloudflare server for M5StickC Plus2 and M5StickS3.
 
 ---
 
