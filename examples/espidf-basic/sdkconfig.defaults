@@ -1,6 +1,7 @@
-# Required by arduino-esp32 (it refuses to configure without these)
+# Required by arduino-esp32 (it refuses to configure without this)
 CONFIG_FREERTOS_HZ=1000
-CONFIG_AUTOSTART_ARDUINO=y
+# Leave CONFIG_AUTOSTART_ARDUINO unset so the example's app_main() is the
+# entry point instead of Arduino's setup()/loop() wrapper.
 
 # Broaden TLS cipher support (WebSocket/MQTT transport helpers)
 CONFIG_MBEDTLS_PSK_MODES=y
