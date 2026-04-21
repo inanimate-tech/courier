@@ -106,7 +106,7 @@ def main():
         print("PlatformIO registry: no published version found (first publish)")
 
     # Check against ESP Component Registry
-    idf_latest = get_idf_latest("inanimate-tech", "courier")
+    idf_latest = get_idf_latest("inanimate", "courier")
     if idf_latest:
         print(f"ESP Component Registry latest: {idf_latest}")
         if Version(local_version) <= Version(idf_latest):
