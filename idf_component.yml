@@ -1,4 +1,4 @@
-version: "0.3.0"
+version: "0.3.1"
 description: "Batteries-included JSON messaging for ESP32 — WiFi, WebSocket, MQTT, UDP multicast, self-healing reconnection, all handled"
 url: "https://github.com/inanimate-tech/courier"
 repository: "https://github.com/inanimate-tech/courier.git"

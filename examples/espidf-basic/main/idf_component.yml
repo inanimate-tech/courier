@@ -1,7 +1,7 @@
 dependencies:
   # Local path so the example builds against the in-tree courier component.
   # Consumers copying this example should change this to a pinned release:
-  #   inanimate/courier: ">=0.3.0"
+  #   inanimate/courier: ">=0.3.1"
   courier:
     path: ../../..
   espressif/esp_websocket_client: ">=1.0.0"
