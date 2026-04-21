@@ -1,6 +1,7 @@
 // ESP-IDF example — demonstrates Courier with both WebSocket and MQTT transports.
 // This uses the Arduino component for ESP-IDF (not Arduino IDE).
 
+#include <Arduino.h>
 #include <Courier.h>
 #include <CourierMqttTransport.h>
 
@@ -16,12 +17,17 @@ Courier courier(makeConfig());
 CourierMqttTransport mqtt;
 
 extern "C" void app_main() {
+    // Bring up the Arduino runtime (Wi-Fi stack, timers, etc.) that courier
+    // relies on. Required because CONFIG_AUTOSTART_ARDUINO is off — this
+    // example uses app_main() directly instead of Arduino's setup()/loop().
+    initArduino();
+
     mqtt.subscribe("devices/my-device/command");
     mqtt.setDefaultPublishTopic("devices/my-device/event");
     mqtt.setClientId("my-device-001");
 
     courier.onConnected([]() {
-        courier.send("{\"type\":\"hello\"}");
+        courier.send(R"({"type":"hello"})");
     });
 
     courier.onMessage([](const char* type, JsonDocument& doc) {

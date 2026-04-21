@@ -29,7 +29,7 @@ CourierConfig makeConfig() {
 Courier courier(makeConfig());
 
 void setup() {
-  courier.onConnected([]() { courier.send("{\"type\":\"hello\"}"); });
+  courier.onConnected([]() { courier.send(R"({"type":"hello"})"); });
   courier.onMessage([](const char* type, JsonDocument& doc) {
     Serial.printf("Got: %s\n", type);
   });
@@ -63,6 +63,16 @@ Courier bundles a number of other great libraries:
 
 Use `onConfigure` hooks to access the full configuration surface of each bundled library.
 
+## Licenses
+
+Courier itself is MIT. Its bundled dependencies carry their own (permissive) licenses:
+
+- WiFiManager, ArduinoJson, ezTime — MIT
+- esp_websocket_client, esp_mqtt_client, ESP-IDF — Apache 2.0
+- arduino-esp32 — LGPL 2.1+
+
+When you ship firmware built with Courier, those libraries ship with it. Follow each library's notice/attribution requirements as applicable — in particular arduino-esp32's LGPL terms around relinking if you statically link it into a closed-source binary.
+
 ## Install
 
 ### PlatformIO
@@ -71,11 +81,11 @@ Use `onConfigure` hooks to access the full configuration surface of each bundled
 ```ini
 lib_deps = https://github.com/inanimate-tech/courier.git
 ```
-Or to pin a version: `https://github.com/inanimate-tech/courier.git#v0.3.0`
+Or to pin a version: `https://github.com/inanimate-tech/courier.git#v0.3.1`
 
 **From the PlatformIO registry** (for stable versions):
 ```ini
-lib_deps = inanimate/courier@0.3.0
+lib_deps = inanimate/courier@0.3.1
 ```
 
 ### ESP-IDF Component
@@ -86,7 +96,7 @@ dependencies:
   inanimate-tech/courier:
     git: https://github.com/inanimate-tech/courier.git
 ```
-Or to pin a version, add `version: v0.3.0`
+Or to pin a version, add `version: v0.3.1`
 
 **From the ESP Component Registry** (for stable versions):
 ```yml
