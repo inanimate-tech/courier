@@ -18,3 +18,5 @@ examples/**/CMakeLists.txt
 # project-level and main/ CMakeLists committed.
 !examples/espidf-basic/CMakeLists.txt
 !examples/espidf-basic/main/CMakeLists.txt
+# Arduino library deps fetched by fetch-arduino-deps.sh — not vendored
+examples/espidf-basic/components/

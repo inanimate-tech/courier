@@ -9,7 +9,11 @@ targets:
   - esp32c3
 dependencies:
   idf:
-    version: ">=4.4.0"
+    # Declared floor matches esp_websocket_client 1.x, which requires IDF 5.0+.
+    # Earlier IDF versions can't resolve any compatible esp_websocket_client.
+    version: ">=5.0.0"
+  espressif/arduino-esp32:
+    version: ">=3.0.0"
   espressif/esp_websocket_client:
     version: "^1.0.0"
 files:
