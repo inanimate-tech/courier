@@ -1,6 +1,6 @@
 # M5Stick Demo
 
-An M5StickC Plus2 connected via WebSocket to a Cloudflare Worker. Type text in a web UI, hit "Send", and the M5Stick displays it.
+An M5Stick connected via WebSocket to a Cloudflare Worker. Type text in a web UI, hit "Send", and the M5Stick displays it.
 
 The device connects via WebSocket managed by [Courier](https://github.com/inanimate-tech/courier). The server is a Cloudflare Worker backed by a Durable Object.
 
@@ -8,20 +8,36 @@ The device connects via WebSocket managed by [Courier](https://github.com/inanim
 
 ```
 m5stick-demo/
-├── device/     # PlatformIO firmware for M5StickC Plus2
+├── device/     # PlatformIO firmware for M5StickC Plus2 / S3
 └── server/     # Cloudflare Worker (Durable Object + web UI)
 ```
 
 ## Device
 
+Two M5Stick variants are supported:
+
+- **M5StickC Plus2** (yellow, most popular) — ESP32-PICO-V3-02, CH9102 USB-UART bridge. This is the default.
+- **M5StickC S3** (grey, newer) — ESP32-S3 with native USB.
+
 ### Build & Flash
 
-First [install the PlatformIO CLI](https://docs.platformio.org/en/stable/core/installation/index.html). Then edit `device/src/main.cpp` and replace the `cfg.host` value with your deployed Worker's hostname. Then:
+First [install the PlatformIO CLI](https://docs.platformio.org/en/stable/core/installation/index.html). Then edit `device/src/main.cpp` and replace the `cfg.host` value with your deployed Worker's hostname.
+
+For the Plus2 (default):
 
 ```bash
 cd device
 pio run -t clean
 pio run -t upload
+pio device monitor
+```
+
+For the S3:
+
+```bash
+cd device
+pio run -e m5sticks3 -t clean
+pio run -e m5sticks3 -t upload
 pio device monitor
 ```
 
