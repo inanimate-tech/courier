@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gemini-speech-to-speech",
+  "main": "src/server.ts",
+  "compatibility_date": "2026-03-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "LiveSession",
+        "name": "LIVE_SESSION"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "new_sqlite_classes": ["LiveSession"],
+      "tag": "v1"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}
