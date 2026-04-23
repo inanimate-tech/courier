@@ -200,17 +200,41 @@ void CourierWSTransport::wsEventHandler(void* handler_arg,
 
     case WEBSOCKET_EVENT_DATA: {
         auto* data = (esp_websocket_event_data_t*)event_data;
-        if (data->op_code != 0x01 || !data->data_ptr || data->data_len <= 0) break;
+        if (!data->data_ptr || data->data_len <= 0) break;
+
+        // Dispatch text (0x01) and binary (0x02) frames. Control frames
+        // (ping/pong/close) are handled by the IDF client; other op_codes
+        // are ignored. Continuation (0x00) uses the type captured from the
+        // first fragment below.
+        const bool isFirstFragment = (data->payload_offset == 0);
+        const bool isSingleChunk =
+            (data->payload_len == data->data_len && isFirstFragment);
+
+        if (isFirstFragment) {
+            if (data->op_code == 0x01) {
+                self->_reassemblyIsBinary = false;
+            } else if (data->op_code == 0x02) {
+                self->_reassemblyIsBinary = true;
+            } else {
+                // Unsupported op_code on a first fragment — drop.
+                break;
+            }
+        }
 
         // Single-chunk message (fits in library's 1KB buffer)
-        if (data->payload_len == data->data_len && data->payload_offset == 0) {
+        if (isSingleChunk) {
             self->freeReassemblyBuf();
-            self->queueIncomingMessage(data->data_ptr, data->data_len);
+            if (self->_reassemblyIsBinary) {
+                self->queueIncomingBinary((const uint8_t*)data->data_ptr, data->data_len);
+            } else {
+                self->queueIncomingMessage(data->data_ptr, data->data_len);
+            }
             break;
         }
 
-        // Multi-chunk: reassemble into PSRAM to keep internal SRAM free
-        if (data->payload_offset == 0) {
+        // Multi-chunk: reassemble into PSRAM to keep internal SRAM free.
+        // +1 lets us NUL-terminate text messages; unused for binary.
+        if (isFirstFragment) {
             self->freeReassemblyBuf();
 #ifdef ESP_PLATFORM
             self->_reassemblyBuf = (char*)heap_caps_malloc(data->payload_len + 1, MALLOC_CAP_SPIRAM);
@@ -229,8 +253,13 @@ void CourierWSTransport::wsEventHandler(void* handler_arg,
             self->_reassemblyPos += data->data_len;
 
             if (self->_reassemblyPos == self->_reassemblyLen) {
-                self->_reassemblyBuf[self->_reassemblyLen] = '\0';
-                self->queueIncomingMessage(self->_reassemblyBuf, self->_reassemblyLen);
+                if (self->_reassemblyIsBinary) {
+                    self->queueIncomingBinary((const uint8_t*)self->_reassemblyBuf,
+                                               self->_reassemblyLen);
+                } else {
+                    self->_reassemblyBuf[self->_reassemblyLen] = '\0';
+                    self->queueIncomingMessage(self->_reassemblyBuf, self->_reassemblyLen);
+                }
                 self->freeReassemblyBuf();
             }
         } else {

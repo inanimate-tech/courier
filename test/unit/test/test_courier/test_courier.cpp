@@ -157,6 +157,27 @@ void test_on_message_single_slot() {
     TEST_ASSERT_EQUAL(1, callCount2);  // last registration wins
 }
 
+void test_on_binary_message_callback() {
+    int callCount = 0;
+    std::vector<uint8_t> receivedData;
+
+    courier->onBinaryMessage([&](const uint8_t* data, size_t len) {
+        callCount++;
+        receivedData.assign(data, data + len);
+    });
+
+    advanceToConnected();
+
+    const uint8_t payload[] = {0x10, 0x20, 0x30, 0x40};
+    auto* mock = MockWebSocketClient::lastInstance();
+    mock->simulateBinaryMessage(payload, sizeof(payload));
+    courier->loop();
+
+    TEST_ASSERT_EQUAL(1, callCount);
+    TEST_ASSERT_EQUAL(sizeof(payload), receivedData.size());
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(payload, receivedData.data(), sizeof(payload));
+}
+
 void test_on_raw_message_callback() {
     int callCount = 0;
     std::string receivedPayload;
@@ -371,6 +392,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_get_transport_unknown);
     RUN_TEST(test_on_message_callback);
     RUN_TEST(test_on_message_single_slot);
+    RUN_TEST(test_on_binary_message_callback);
     RUN_TEST(test_on_raw_message_callback);
     RUN_TEST(test_send_text_when_connected);
     RUN_TEST(test_send_text_when_disconnected);

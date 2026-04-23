@@ -52,6 +52,7 @@ public:
   using Callback = std::function<void()>;
   using MessageCallback = std::function<void(const char* type, JsonDocument& doc)>;
   using RawMessageCallback = std::function<void(const char* payload, size_t length)>;
+  using BinaryMessageCallback = std::function<void(const uint8_t* data, size_t length)>;
   using ConnectionChangeCallback = std::function<void(CourierState state)>;
   using ErrorCallback = std::function<void(const char* category, const char* message)>;
 
@@ -92,6 +93,7 @@ public:
   // --- Event callbacks (single-slot, last registration wins) ---
   void onMessage(MessageCallback cb);
   void onRawMessage(RawMessageCallback cb);
+  void onBinaryMessage(BinaryMessageCallback cb);
   void onConnected(Callback cb);
   void onDisconnected(Callback cb);
   void onConnectionChange(ConnectionChangeCallback cb);
@@ -155,6 +157,7 @@ private:
 
   // Transport message/connection handlers
   void handleTransportMessage(const char* payload, size_t length);
+  void handleTransportBinary(const uint8_t* data, size_t length);
   void handleTransportConnection(CourierTransport* transport, bool connected);
 
   // Health monitoring
@@ -176,6 +179,7 @@ private:
   // Callback storage (all single-slot)
   MessageCallback _messageCallback;
   RawMessageCallback _rawMessageCallback;
+  BinaryMessageCallback _binaryMessageCallback;
   Callback _connectedCallback;
   Callback _disconnectedCallback;
   ConnectionChangeCallback _connectionChangeCallback;

@@ -130,6 +130,7 @@ courier.resumeTransports();
 // Callbacks (single-slot, last registration wins)
 courier.onMessage([](const char* type, JsonDocument& doc) { });
 courier.onRawMessage([](const char* payload, size_t len) { });
+courier.onBinaryMessage([](const uint8_t* data, size_t len) { });
 courier.onConnected([]() { });
 courier.onDisconnected([]() { });
 courier.onError([](const char* category, const char* msg) { });
@@ -156,7 +157,7 @@ BOOTING -> WIFI_CONNECTING -> WIFI_CONNECTED -> TRANSPORTS_CONNECTING -> CONNECT
 
 - **Single instance** — WiFiManager requires a static callback, so only one Courier instance per process
 - **Single-slot callbacks** — each `on*` method is a setter (last registration wins). Application frameworks take the slot and expose virtual methods for subclasses
-- **Single message slot** — transport callbacks queue one pending message at a time; messages arriving before the main loop drains are dropped
+- **Bounded pending queue** — transport callbacks buffer up to 8 pending messages; sustained overload drops frames beyond that
 - **Arduino + ESP-IDF** — depends on Arduino framework for WiFiManager, ArduinoJson, ezTime
 
 ## License

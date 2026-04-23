@@ -13,6 +13,17 @@ static void onMessageCallback(const char* payload, size_t length) {
     lastDeliveredPayload[copyLen] = '\0';
 }
 
+static int deliveredBinaryCount = 0;
+static uint8_t lastDeliveredBinary[512] = {0};
+static size_t lastDeliveredBinaryLen = 0;
+
+static void onBinaryCallback(const uint8_t* data, size_t length) {
+    deliveredBinaryCount++;
+    size_t copyLen = length < sizeof(lastDeliveredBinary) ? length : sizeof(lastDeliveredBinary);
+    memcpy(lastDeliveredBinary, data, copyLen);
+    lastDeliveredBinaryLen = copyLen;
+}
+
 static int connectionEventCount = 0;
 static bool lastConnectionState = false;
 
@@ -27,9 +38,13 @@ void setUp(void) {
     MockWebSocketClient::resetInstanceCount();
     ws = new CourierWSTransport();
     ws->setMessageCallback(onMessageCallback);
+    ws->setBinaryMessageCallback(onBinaryCallback);
     ws->setConnectionCallback(onConnectionCallback);
     deliveredMessageCount = 0;
     lastDeliveredPayload[0] = '\0';
+    deliveredBinaryCount = 0;
+    lastDeliveredBinaryLen = 0;
+    memset(lastDeliveredBinary, 0, sizeof(lastDeliveredBinary));
     connectionEventCount = 0;
     lastConnectionState = false;
 }
@@ -91,6 +106,38 @@ void test_message_delivered_to_callback() {
     ws->loop();
     TEST_ASSERT_EQUAL(1, deliveredMessageCount);
     TEST_ASSERT_EQUAL_STRING("{\"type\":\"test\",\"value\":42}", lastDeliveredPayload);
+}
+
+// Regression: the old handler filtered op_code != 0x01, so 0x02 (binary)
+// frames never reached any callback. Verifies both that they now dispatch
+// and that they route to onBinaryMessage, not onMessage.
+void test_binary_message_delivered_to_callback() {
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    const uint8_t payload[] = {0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0xFF};
+    client->simulateBinaryMessage(payload, sizeof(payload));
+    ws->loop();
+    TEST_ASSERT_EQUAL(1, deliveredBinaryCount);
+    TEST_ASSERT_EQUAL(sizeof(payload), lastDeliveredBinaryLen);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(payload, lastDeliveredBinary, sizeof(payload));
+    TEST_ASSERT_EQUAL(0, deliveredMessageCount);  // not routed to text callback
+}
+
+// Text and binary route to different callbacks (the old single-path
+// handler would have thrown all of them at onMessage). Drains between
+// frames because the host-build pending buffer is single-slot — the
+// FIFO that absorbs bursts in the same scheduler slice is ESP-only.
+void test_binary_and_text_routed_independently() {
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    const uint8_t audio[] = {0x01, 0x02, 0x03};
+    client->simulateBinaryMessage(audio, sizeof(audio));
+    ws->loop();
+    client->simulateTextMessage("{\"type\":\"json\"}");
+    ws->loop();
+    TEST_ASSERT_EQUAL(1, deliveredBinaryCount);
+    TEST_ASSERT_EQUAL(1, deliveredMessageCount);
+    TEST_ASSERT_EQUAL_STRING("{\"type\":\"json\"}", lastDeliveredPayload);
 }
 
 void test_connection_callback_on_connect() {
@@ -225,6 +272,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_connected_after_connect_event);
     RUN_TEST(test_disconnected_after_disconnect_event);
     RUN_TEST(test_message_delivered_to_callback);
+    RUN_TEST(test_binary_message_delivered_to_callback);
+    RUN_TEST(test_binary_and_text_routed_independently);
     RUN_TEST(test_connection_callback_on_connect);
     RUN_TEST(test_connection_callback_on_disconnect);
     RUN_TEST(test_send_when_connected);

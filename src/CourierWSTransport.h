@@ -54,10 +54,12 @@ private:
 
     void destroyClient();
 
-    // PSRAM reassembly buffer for fragmented messages
+    // PSRAM reassembly buffer for fragmented messages. Shared between text
+    // and binary paths — only one frame is in flight per transport at a time.
     char* _reassemblyBuf = nullptr;
     size_t _reassemblyLen = 0;
     size_t _reassemblyPos = 0;
+    bool _reassemblyIsBinary = false;
     void freeReassemblyBuf();
 
     static void wsEventHandler(void* handler_arg,
