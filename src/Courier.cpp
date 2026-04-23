@@ -28,6 +28,9 @@ Courier::Courier(const CourierConfig& config)
   _builtinWS.setMessageCallback([this](const char* p, size_t l) {
     handleTransportMessage(p, l);
   });
+  _builtinWS.setBinaryMessageCallback([this](const uint8_t* d, size_t l) {
+    handleTransportBinary(d, l);
+  });
   _builtinWS.setConnectionCallback([this](CourierTransport* t, bool c) {
     handleTransportConnection(t, c);
   });
@@ -471,6 +474,11 @@ void Courier::handleTransportMessage(const char* payload, size_t length)
   if (_messageCallback) _messageCallback(mtype, doc);
 }
 
+void Courier::handleTransportBinary(const uint8_t* data, size_t length)
+{
+  if (_binaryMessageCallback) _binaryMessageCallback(data, length);
+}
+
 void Courier::handleTransportConnection(CourierTransport* transport, bool connected)
 {
   if (connected) {
@@ -636,6 +644,11 @@ void Courier::onRawMessage(RawMessageCallback cb)
   _rawMessageCallback = cb;
 }
 
+void Courier::onBinaryMessage(BinaryMessageCallback cb)
+{
+  _binaryMessageCallback = cb;
+}
+
 void Courier::onConnected(Callback cb)
 {
   _connectedCallback = cb;
@@ -713,6 +726,9 @@ void Courier::wireTransportCallbacks(CourierTransport* transport)
 {
   transport->setMessageCallback([this](const char* p, size_t l) {
     handleTransportMessage(p, l);
+  });
+  transport->setBinaryMessageCallback([this](const uint8_t* d, size_t l) {
+    handleTransportBinary(d, l);
   });
   transport->setConnectionCallback([this](CourierTransport* t, bool c) {
     handleTransportConnection(t, c);

@@ -153,6 +153,9 @@ courier.onMessage([](const char* type, JsonDocument& doc) { });
 // Raw messages — for non-JSON or custom framing
 courier.onRawMessage([](const char* payload, size_t len) { });
 
+// Binary WS frames — e.g. raw PCM audio. sendBinaryTo() is the write side.
+courier.onBinaryMessage([](const uint8_t* data, size_t len) { });
+
 // Connection state
 courier.onConnected([]() { });
 courier.onDisconnected([]() { });
@@ -361,7 +364,8 @@ Optional overrides:
 From your transport's event handler (which may run on a different task), use the thread-safe queue methods:
 
 ```cpp
-queueIncomingMessage(payload, len);     // queue a received message
+queueIncomingMessage(payload, len);     // queue a received text message
+queueIncomingBinary(data, len);         // queue a received binary message
 queueConnectionChange(true);            // queue a connection state change
 queueTransportFailed();                 // report unrecoverable failure to Courier
 ```

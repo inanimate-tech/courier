@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **Binary WS frames are no longer dropped.** `CourierWSTransport` previously filtered out `op_code != 0x01`, silently discarding binary (`0x02`) and continuation frames. Binary payloads now reach the application via a new `onBinaryMessage` callback, and multi-fragment binary messages are reassembled into the same PSRAM buffer used for text.
+- **Burst of messages on connect no longer lose frames past the first.** The single-slot pending buffer in `CourierTransport` is replaced with an 8-deep FreeRTOS queue (shared by text and binary), so servers that send a burst of frames in the same scheduler slice don't get everything after the first dropped. Producer remains non-blocking; overflow still drops, just with more headroom. Host-build path keeps the single-slot fallback for unit-testability.
+
+### New
+
+- **`courier.onBinaryMessage(cb)`** — receive binary WS frames. Paired with the existing `sendBinaryTo(name, data, len)` for a round-trip binary channel. Opt-in; text-only apps keep working unchanged.
+- **`examples/gemini-speech-to-speech`** — M5Stick push-to-talk voice assistant wired through a Cloudflare Worker to Gemini Live. Exercises binary frames (PCM audio both directions) and the on-connect message burst.
+
+---
+
 ## v0.3.1
 
 ### Fixes
