@@ -15,27 +15,23 @@ idf_component_register(
 # (see espressif/esp-idf#9929).
 include(FetchContent)
 
+# SOURCE_SUBDIR points at a non-existent path so MakeAvailable populates the
+# sources without calling add_subdirectory — WiFiManager ships an
+# idf_component_register CMakeLists.txt that expects to be its own top-level
+# component, which would conflict with vendoring its sources into courier.
 FetchContent_Declare(
     eztime
     GIT_REPOSITORY https://github.com/ropg/ezTime.git
     GIT_TAG 0.8.3
+    SOURCE_SUBDIR _populate_only_
 )
 FetchContent_Declare(
     wifimanager
     GIT_REPOSITORY https://github.com/tzapu/WiFiManager.git
     GIT_TAG v2.0.17
+    SOURCE_SUBDIR _populate_only_
 )
-
-# Populate (not MakeAvailable) — the upstreams ship Arduino-style CMakeLists
-# we don't want add_subdirectory'd.
-FetchContent_GetProperties(eztime)
-if(NOT eztime_POPULATED)
-    FetchContent_Populate(eztime)
-endif()
-FetchContent_GetProperties(wifimanager)
-if(NOT wifimanager_POPULATED)
-    FetchContent_Populate(wifimanager)
-endif()
+FetchContent_MakeAvailable(eztime wifimanager)
 
 target_sources(${COMPONENT_LIB} PRIVATE
     "${eztime_SOURCE_DIR}/src/ezTime.cpp"

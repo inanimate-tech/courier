@@ -3,6 +3,7 @@
 build/
 dist/
 managed_components/
+sdkconfig
 sdkconfig.old
 sdkconfig.esp32
 sdkconfig.esp32s2
