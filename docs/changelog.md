@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.0-dev (24c703c)
+
+Theme: rationalising naming.
+
+---
+
 ## v0.3.1
 
 ### Fixes
@@ -138,3 +144,30 @@ Same reason as above.
 ## v0.1.0
 
 First public release.
+
+---
+
+## Usage (for agents)
+
+### Consuming Courier
+
+Courier is a foundational library that other projects depend on. If you are an agent working in a downstream project that depends on Courier:
+
+1. Check the version of Courier your project currently uses (look at the dependency pin in your project's `platformio.ini` / `idf_component.yml`, or the vendored copy's `library.json` / `idf_component.yml`).
+2. Check the latest version of Courier in this changelog.
+3. Read every section between those two versions and update your project's code accordingly — paying particular attention to **Breaking changes**.
+
+### Updating this changelog
+
+Each in-progress version section is headed `## vX.Y.Z-dev (<git-hash>)`, where `<git-hash>` is the short hash of the commit that introduced the section (or the most recent commit it covers, if updated in place). Released versions drop the `-dev` suffix and the git hash.
+
+Standard subsections, in order, omitting any that are empty:
+
+- **Breaking changes** — API changes that require downstream code updates.
+- **New features** — additions that are backward-compatible.
+- **Fixes** — bug fixes.
+- **Internal** — refactors, tooling, tests, docs — anything not visible to consumers.
+
+A `-dev` version section is a work-in-progress: continue appending to it as work lands. When a semver version is released (the `-dev` suffix is removed and the version is published to the PlatformIO Registry and ESP Component Registry), that section is frozen — do not modify it. New work then opens a fresh `## vX.Y.Z-dev (<git-hash>)` section above it.
+
+The `version` field in `library.json` and `idf_component.yml` tracks the in-progress `-dev` version while work is underway, and is updated to the released semver string at publish time (see `docs/publishing.md`).
