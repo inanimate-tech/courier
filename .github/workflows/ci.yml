@@ -49,8 +49,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Fetch Arduino library deps
-        run: ./examples/espidf-basic/tools/fetch-arduino-deps.sh
       - name: Build espidf-basic example
         uses: espressif/esp-idf-ci-action@v1
         with:

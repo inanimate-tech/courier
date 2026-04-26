@@ -1,4 +1,4 @@
-version: "0.3.1"
+version: "0.3.2"
 description: "Batteries-included JSON messaging for ESP32 — WiFi, WebSocket, MQTT, UDP multicast, self-healing reconnection, all handled"
 url: "https://github.com/inanimate-tech/courier"
 repository: "https://github.com/inanimate-tech/courier.git"
@@ -16,6 +16,8 @@ dependencies:
     version: ">=3.0.0"
   espressif/esp_websocket_client:
     version: "^1.0.0"
+  bblanchon/arduinojson:
+    version: "^7.0.0"
 files:
   # compote does not read .gitignore — we must explicitly exclude build
   # artifacts and dev-only files, or they end up in the published tarball.
