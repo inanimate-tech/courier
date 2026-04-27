@@ -44,11 +44,17 @@ public:
     void setBinaryMessageCallback(BinaryMessageCallback cb) { _onBinaryMessage = cb; }
     void setConnectionCallback(ConnectionCallback cb) { _onConnection = cb; }
 
+    // Set by Client when transport is registered. Fires on every text
+    // payload regardless of whether the user has registered _onMessage.
+    // Used for JSON dispatch via Client::onMessage(type, doc).
+    void setClientHook(MessageCallback cb) { _clientHook = cb; }
+
 protected:
     MessageCallback _onMessage;
     BinaryMessageCallback _onBinaryMessage;
     ConnectionCallback _onConnection;
     FailureCallback _onFailure;
+    MessageCallback _clientHook;
 
     struct PendingMessage {
         void*  payload;
@@ -94,6 +100,7 @@ protected:
                 if (_onBinaryMessage) _onBinaryMessage((const uint8_t*)msg.payload, msg.length);
             } else {
                 if (_onMessage) _onMessage((const char*)msg.payload, msg.length);
+                if (_clientHook) _clientHook((const char*)msg.payload, msg.length);
             }
             free(msg.payload);
         }
