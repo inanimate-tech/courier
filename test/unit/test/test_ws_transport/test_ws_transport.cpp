@@ -216,6 +216,17 @@ void test_on_configure_not_set_works() {
     TEST_ASSERT_TRUE(client->started);
 }
 
+void test_fifo_absorbs_burst_before_drain() {
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    client->simulateTextMessage("{\"type\":\"session\"}");
+    client->simulateTextMessage("{\"type\":\"ready\"}");
+    client->simulateTextMessage("{\"type\":\"settings\"}");
+    ws->loop();
+    TEST_ASSERT_EQUAL(3, deliveredMessageCount);
+    TEST_ASSERT_EQUAL_STRING("{\"type\":\"settings\"}", lastDeliveredPayload);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_name_is_ws);
@@ -237,5 +248,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_on_configure_called_before_init);
     RUN_TEST(test_on_configure_can_override_config_cert);
     RUN_TEST(test_on_configure_not_set_works);
+    RUN_TEST(test_fifo_absorbs_burst_before_drain);
     return UNITY_END();
 }

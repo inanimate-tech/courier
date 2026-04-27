@@ -3,17 +3,22 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <atomic>
 
+#include "CourierSpscQueue.h"
+
 class CourierTransport {
 public:
     using MessageCallback = std::function<void(const char* payload, size_t length)>;
+    using BinaryMessageCallback = std::function<void(const uint8_t* data, size_t length)>;
     using ConnectionCallback = std::function<void(CourierTransport* transport, bool connected)>;
 
     virtual ~CourierTransport() {
-        free(_pendingPayload);
+        PendingMessage msg;
+        while (_pending.pop(msg)) free(msg.payload);
     }
 
     virtual void begin(const char* host, uint16_t port, const char* path) = 0;
@@ -24,64 +29,55 @@ public:
     virtual bool sendBinary(const uint8_t* data, size_t len) { (void)data; (void)len; return false; }
     virtual bool publish(const char* topic, const char* payload) {
         (void)topic;
-        return send(payload);  // default: ignore topic, just send
+        return send(payload);
     }
     virtual bool topicRequired() const { return false; }
     virtual const char* name() const = 0;
 
-    // Suspend/resume: stops the transport task to free its stack memory
-    // (e.g. before OTA TLS handshake), then restarts without full teardown.
     virtual void suspend() {}
     virtual void resume() {}
-
     virtual bool isPersistent() const { return true; }
 
     using FailureCallback = std::function<void()>;
     void setFailureCallback(FailureCallback cb) { _onFailure = cb; }
-
     void setMessageCallback(MessageCallback cb) { _onMessage = cb; }
+    void setBinaryMessageCallback(BinaryMessageCallback cb) { _onBinaryMessage = cb; }
     void setConnectionCallback(ConnectionCallback cb) { _onConnection = cb; }
 
 protected:
     MessageCallback _onMessage;
+    BinaryMessageCallback _onBinaryMessage;
     ConnectionCallback _onConnection;
     FailureCallback _onFailure;
 
-    // --- Cross-task pending message buffer ---
-    // Transport task writes via queueIncomingMessage/queueConnectionChange.
-    // Main loop drains via drainPending() (called from loop()).
+    struct PendingMessage {
+        void*  payload;
+        size_t length;
+        bool   isBinary;
+    };
 
-    char* _pendingPayload = nullptr;
-    size_t _pendingLength = 0;
-    std::atomic<bool> _msgPending{false};
+    static constexpr size_t MESSAGE_QUEUE_DEPTH = 8;
+    CourierSpscQueue<PendingMessage, MESSAGE_QUEUE_DEPTH> _pending;
 
     std::atomic<bool> _connChangePending{false};
     std::atomic<bool> _connChangeState{false};
     std::atomic<bool> _failurePending{false};
 
-    // NOTE: Single-slot pending buffer. If the main loop doesn't call loop()
-    // fast enough, messages arriving while a previous message is pending will
-    // be silently dropped. This is a deliberate trade-off for minimal RAM
-    // usage on ESP32. For high-throughput use cases, consider replacing with
-    // a FreeRTOS queue or ring buffer.
-
-    // Called from transport event handler (may be on a different task).
-    // Copies payload into a malloc'd buffer and sets the pending flag.
     void queueIncomingMessage(const char* payload, size_t len) {
-        if (_msgPending.load(std::memory_order_acquire)) {
-            // Previous message still pending — drop this one
-            return;
-        }
         char* buf = (char*)malloc(len + 1);
         if (!buf) return;
         memcpy(buf, payload, len);
         buf[len] = '\0';
-        _pendingPayload = buf;
-        _pendingLength = len;
-        _msgPending.store(true, std::memory_order_release);
+        if (!_pending.push(PendingMessage{buf, len, false})) free(buf);
     }
 
-    // Called from transport event handler.
+    void queueIncomingBinary(const uint8_t* data, size_t len) {
+        uint8_t* buf = (uint8_t*)malloc(len);
+        if (!buf) return;
+        memcpy(buf, data, len);
+        if (!_pending.push(PendingMessage{buf, len, true})) free(buf);
+    }
+
     void queueConnectionChange(bool connected) {
         _connChangeState.store(connected, std::memory_order_relaxed);
         _connChangePending.store(true, std::memory_order_release);
@@ -91,13 +87,15 @@ protected:
         _failurePending.store(true, std::memory_order_release);
     }
 
-    // Called from loop() on the main task. Fires callbacks if pending.
     void drainPending() {
-        if (_msgPending.load(std::memory_order_acquire)) {
-            if (_onMessage) _onMessage(_pendingPayload, _pendingLength);
-            free(_pendingPayload);
-            _pendingPayload = nullptr;
-            _msgPending.store(false, std::memory_order_release);
+        PendingMessage msg;
+        while (_pending.pop(msg)) {
+            if (msg.isBinary) {
+                if (_onBinaryMessage) _onBinaryMessage((const uint8_t*)msg.payload, msg.length);
+            } else {
+                if (_onMessage) _onMessage((const char*)msg.payload, msg.length);
+            }
+            free(msg.payload);
         }
         if (_connChangePending.load(std::memory_order_acquire)) {
             bool state = _connChangeState.load(std::memory_order_relaxed);

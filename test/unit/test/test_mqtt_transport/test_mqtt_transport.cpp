@@ -388,15 +388,17 @@ void test_message_at_buffer_limit_delivered() {
     TEST_ASSERT_EQUAL(payload.size(), lastDeliveredLength);
 }
 
-void test_single_slot_queue_drops_when_pending() {
+// Bursts arriving before a single drain are now absorbed by the FIFO
+// rather than dropped after the first.
+void test_burst_messages_before_drain_all_delivered() {
     mqtt = createWithTopics();
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
     client->simulateMessage("devices/dev123/command", "{\"type\":\"first\"}");
     client->simulateMessage("devices/dev123/command", "{\"type\":\"second\"}");
     mqtt->loop();
-    TEST_ASSERT_EQUAL(1, deliveredMessageCount);
-    TEST_ASSERT_EQUAL_STRING("{\"type\":\"first\"}", lastDeliveredPayload);
+    TEST_ASSERT_EQUAL(2, deliveredMessageCount);
+    TEST_ASSERT_EQUAL_STRING("{\"type\":\"second\"}", lastDeliveredPayload);
 }
 
 void test_second_message_after_drain() {
@@ -519,7 +521,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_multiple_room_changes_no_accumulation);
     RUN_TEST(test_large_command_message_delivered);
     RUN_TEST(test_message_at_buffer_limit_delivered);
-    RUN_TEST(test_single_slot_queue_drops_when_pending);
+    RUN_TEST(test_burst_messages_before_drain_all_delivered);
     RUN_TEST(test_second_message_after_drain);
     RUN_TEST(test_set_client_id_before_begin);
     RUN_TEST(test_set_default_publish_topic);
