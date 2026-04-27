@@ -6,6 +6,18 @@
 static int deliveredMessageCount = 0;
 static char lastDeliveredPayload[512] = "";
 
+static int deliveredBinaryCount = 0;
+static uint8_t lastDeliveredBinary[512] = {0};
+static size_t lastDeliveredBinaryLen = 0;
+
+static void onBinaryCallback(const uint8_t* data, size_t length) {
+    deliveredBinaryCount++;
+    size_t copyLen = length < sizeof(lastDeliveredBinary)
+                        ? length : sizeof(lastDeliveredBinary);
+    memcpy(lastDeliveredBinary, data, copyLen);
+    lastDeliveredBinaryLen = copyLen;
+}
+
 static void onMessageCallback(const char* payload, size_t length) {
     deliveredMessageCount++;
     size_t copyLen = length < sizeof(lastDeliveredPayload) - 1 ? length : sizeof(lastDeliveredPayload) - 1;
@@ -27,11 +39,15 @@ void setUp(void) {
     MockWebSocketClient::resetInstanceCount();
     ws = new CourierWSTransport();
     ws->setMessageCallback(onMessageCallback);
+    ws->setBinaryMessageCallback(onBinaryCallback);
     ws->setConnectionCallback(onConnectionCallback);
     deliveredMessageCount = 0;
     lastDeliveredPayload[0] = '\0';
     connectionEventCount = 0;
     lastConnectionState = false;
+    deliveredBinaryCount = 0;
+    lastDeliveredBinaryLen = 0;
+    memset(lastDeliveredBinary, 0, sizeof(lastDeliveredBinary));
 }
 
 void tearDown(void) {
@@ -227,6 +243,20 @@ void test_fifo_absorbs_burst_before_drain() {
     TEST_ASSERT_EQUAL_STRING("{\"type\":\"settings\"}", lastDeliveredPayload);
 }
 
+// Regression: the old handler filtered op_code != 0x01, so 0x02 (binary)
+// frames never reached any callback.
+void test_binary_message_delivered_to_callback() {
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    const uint8_t payload[] = {0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0xFF};
+    client->simulateBinaryMessage(payload, sizeof(payload));
+    ws->loop();
+    TEST_ASSERT_EQUAL(1, deliveredBinaryCount);
+    TEST_ASSERT_EQUAL(sizeof(payload), lastDeliveredBinaryLen);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(payload, lastDeliveredBinary, sizeof(payload));
+    TEST_ASSERT_EQUAL(0, deliveredMessageCount);  // not routed to text callback
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_name_is_ws);
@@ -249,5 +279,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_on_configure_can_override_config_cert);
     RUN_TEST(test_on_configure_not_set_works);
     RUN_TEST(test_fifo_absorbs_burst_before_drain);
+    RUN_TEST(test_binary_message_delivered_to_callback);
     return UNITY_END();
 }
