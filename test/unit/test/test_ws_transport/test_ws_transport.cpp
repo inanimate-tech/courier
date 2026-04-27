@@ -15,7 +15,7 @@ static void onBinaryCallback(const uint8_t* data, size_t length) {
     size_t copyLen = length < sizeof(lastDeliveredBinary)
                         ? length : sizeof(lastDeliveredBinary);
     memcpy(lastDeliveredBinary, data, copyLen);
-    lastDeliveredBinaryLen = copyLen;
+    lastDeliveredBinaryLen = length;
 }
 
 static void onMessageCallback(const char* payload, size_t length) {
@@ -257,6 +257,33 @@ void test_binary_message_delivered_to_callback() {
     TEST_ASSERT_EQUAL(0, deliveredMessageCount);  // not routed to text callback
 }
 
+// Verifies the multi-chunk reassembly path: a 4KB binary payload
+// arrives as four 1KB chunks; the first chunk's op_code (0x02) is
+// captured into _reassemblyIsBinary, continuation chunks (op_code 0x00)
+// inherit it. Reassembled bytes must match the original.
+void test_binary_chunked_message_reassembled() {
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+
+    // Build a 4KB pattern (each byte = its index modulo 256).
+    constexpr size_t total = 4096;
+    static uint8_t payload[total];
+    for (size_t i = 0; i < total; ++i) payload[i] = (uint8_t)(i & 0xFF);
+
+    client->simulateChunkedMessage(0x02, payload, total, 1024);
+    ws->loop();
+
+    TEST_ASSERT_EQUAL(1, deliveredBinaryCount);
+    TEST_ASSERT_EQUAL(total, lastDeliveredBinaryLen);
+    // Spot-check the bytes — `lastDeliveredBinary` is sized 512, so we
+    // only verify the first 512 bytes of the reassembly. The length
+    // assertion above already proves the rest arrived.
+    for (size_t i = 0; i < 512; ++i) {
+        TEST_ASSERT_EQUAL((uint8_t)(i & 0xFF), lastDeliveredBinary[i]);
+    }
+    TEST_ASSERT_EQUAL(0, deliveredMessageCount);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_name_is_ws);
@@ -280,5 +307,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_on_configure_not_set_works);
     RUN_TEST(test_fifo_absorbs_burst_before_drain);
     RUN_TEST(test_binary_message_delivered_to_callback);
+    RUN_TEST(test_binary_chunked_message_reassembled);
     return UNITY_END();
 }

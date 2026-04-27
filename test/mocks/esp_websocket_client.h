@@ -124,6 +124,28 @@ public:
         }
     }
 
+    // Fire a chunked message: one logical payload delivered as multiple
+    // WEBSOCKET_EVENT_DATA events. The first chunk carries the op_code
+    // (0x01 for text, 0x02 for binary); continuation chunks use op_code
+    // 0x00 per the WebSocket protocol.
+    void simulateChunkedMessage(uint8_t firstOpCode,
+                                 const uint8_t* payload,
+                                 size_t totalLen,
+                                 size_t chunkSize) {
+        if (!eventHandler || chunkSize == 0) return;
+        for (size_t off = 0; off < totalLen; off += chunkSize) {
+            size_t take = (totalLen - off) < chunkSize ? (totalLen - off) : chunkSize;
+            esp_websocket_event_data_t data;
+            data.data_ptr      = (const char*)payload + off;
+            data.data_len      = (int)take;
+            data.payload_len   = (int)totalLen;
+            data.payload_offset = (int)off;
+            data.op_code       = (off == 0) ? firstOpCode : 0x00;
+            eventHandler(eventHandlerArg, WEBSOCKET_EVENTS,
+                         WEBSOCKET_EVENT_DATA, &data);
+        }
+    }
+
     static MockWebSocketClient* lastInstance() { return s_lastInstance; }
     static int instanceCount() { return s_instanceCount; }
     static void resetInstanceCount() { s_instanceCount = 0; }
