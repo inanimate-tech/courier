@@ -1,16 +1,16 @@
 #include <Courier.h>
-#include <CourierMqttTransport.h>
+#include <MqttTransport.h>
 
-CourierConfig makeConfig() {
-  CourierConfig cfg;
+Courier::Config makeConfig() {
+  Courier::Config cfg;
   cfg.host = "broker.example.com";
   cfg.port = 443;
   cfg.path = "/ws";
   return cfg;
 }
 
-Courier courier(makeConfig());
-CourierMqttTransport mqtt;
+Courier::Client courier(makeConfig());
+Courier::MqttTransport mqtt;
 
 // Configure MQTT broker credentials via raw IDF config access
 void configureMqtt() {
@@ -51,7 +51,7 @@ void setup() {
   // Add MQTT transport before setup
   courier.addTransport("mqtt", &mqtt);
 
-  CourierEndpoint mqttEndpoint;
+  Courier::Endpoint mqttEndpoint;
   mqttEndpoint.path = "/mqtt";
   courier.setEndpoint("mqtt", mqttEndpoint);
 

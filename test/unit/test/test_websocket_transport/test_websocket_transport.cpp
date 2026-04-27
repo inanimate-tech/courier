@@ -1,7 +1,9 @@
 #include <unity.h>
-#include <CourierWSTransport.h>
+#include <WebSocketTransport.h>
 #include <esp_websocket_client.h>
 #include <cstring>
+
+using namespace Courier;
 
 static int deliveredMessageCount = 0;
 static char lastDeliveredPayload[512] = "";
@@ -28,16 +30,16 @@ static void onMessageCallback(const char* payload, size_t length) {
 static int connectionEventCount = 0;
 static bool lastConnectionState = false;
 
-static void onConnectionCallback(CourierTransport* transport, bool connected) {
+static void onConnectionCallback(Transport* transport, bool connected) {
     connectionEventCount++;
     lastConnectionState = connected;
 }
 
-static CourierWSTransport* ws = nullptr;
+static WebSocketTransport* ws = nullptr;
 
 void setUp(void) {
     MockWebSocketClient::resetInstanceCount();
-    ws = new CourierWSTransport();
+    ws = new WebSocketTransport();
     ws->setMessageCallback(onMessageCallback);
     ws->setBinaryMessageCallback(onBinaryCallback);
     ws->setConnectionCallback(onConnectionCallback);
@@ -168,9 +170,9 @@ void test_reconnect_creates_new_client() {
 void test_config_cert_pem_passed_to_client() {
     delete ws;
     static const char* MY_CERT = "-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n";
-    CourierWSTransportConfig cfg;
+    WebSocketTransport::Config cfg;
     cfg.cert_pem = MY_CERT;
-    ws = new CourierWSTransport(cfg);
+    ws = new WebSocketTransport(cfg);
     ws->setMessageCallback(onMessageCallback);
     ws->setConnectionCallback(onConnectionCallback);
     ws->begin("host", 443, "/path");
@@ -187,9 +189,9 @@ void test_default_certs_used_by_default() {
 
 void test_no_cert_when_default_certs_disabled() {
     delete ws;
-    CourierWSTransportConfig cfg;
+    WebSocketTransport::Config cfg;
     cfg.use_default_certs = false;
-    ws = new CourierWSTransport(cfg);
+    ws = new WebSocketTransport(cfg);
     ws->setMessageCallback(onMessageCallback);
     ws->setConnectionCallback(onConnectionCallback);
     ws->begin("host", 443, "/path");
@@ -213,9 +215,9 @@ void test_on_configure_can_override_config_cert() {
     delete ws;
     static const char* ORIGINAL_CERT = "ORIGINAL";
     static const char* OVERRIDE_CERT = "OVERRIDE";
-    CourierWSTransportConfig cfg;
+    WebSocketTransport::Config cfg;
     cfg.cert_pem = ORIGINAL_CERT;
-    ws = new CourierWSTransport(cfg);
+    ws = new WebSocketTransport(cfg);
     ws->setMessageCallback(onMessageCallback);
     ws->onConfigure([](esp_websocket_client_config_t& config) {
         config.cert_pem = OVERRIDE_CERT;

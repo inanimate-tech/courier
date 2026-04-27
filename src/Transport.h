@@ -8,15 +8,17 @@
 #include <functional>
 #include <atomic>
 
-#include "CourierSpscQueue.h"
+#include "SpscQueue.h"
 
-class CourierTransport {
+namespace Courier {
+
+class Transport {
 public:
     using MessageCallback = std::function<void(const char* payload, size_t length)>;
     using BinaryMessageCallback = std::function<void(const uint8_t* data, size_t length)>;
-    using ConnectionCallback = std::function<void(CourierTransport* transport, bool connected)>;
+    using ConnectionCallback = std::function<void(Transport* transport, bool connected)>;
 
-    virtual ~CourierTransport() {
+    virtual ~Transport() {
         PendingMessage msg;
         while (_pending.pop(msg)) free(msg.payload);
     }
@@ -63,7 +65,7 @@ protected:
     };
 
     static constexpr size_t MESSAGE_QUEUE_DEPTH = 8;
-    CourierSpscQueue<PendingMessage, MESSAGE_QUEUE_DEPTH> _pending;
+    SpscQueue<PendingMessage, MESSAGE_QUEUE_DEPTH> _pending;
 
     std::atomic<bool> _connChangePending{false};
     std::atomic<bool> _connChangeState{false};
@@ -115,5 +117,7 @@ protected:
         }
     }
 };
+
+}  // namespace Courier
 
 #endif // COURIER_TRANSPORT_H

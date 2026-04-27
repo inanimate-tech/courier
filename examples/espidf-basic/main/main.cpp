@@ -3,18 +3,18 @@
 
 #include <Arduino.h>
 #include <Courier.h>
-#include <CourierMqttTransport.h>
+#include <MqttTransport.h>
 
-CourierConfig makeConfig() {
-    CourierConfig cfg;
+Courier::Config makeConfig() {
+    Courier::Config cfg;
     cfg.host = "example.com";
     cfg.port = 443;
     cfg.path = "/ws";
     return cfg;
 }
 
-Courier courier(makeConfig());
-CourierMqttTransport mqtt;
+Courier::Client courier(makeConfig());
+Courier::MqttTransport mqtt;
 
 extern "C" void app_main() {
     // Bring up the Arduino runtime (Wi-Fi stack, timers, etc.) that courier

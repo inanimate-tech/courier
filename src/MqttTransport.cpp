@@ -1,4 +1,4 @@
-#include "CourierMqttTransport.h"
+#include "MqttTransport.h"
 #include <cstring>
 
 #ifdef ESP_PLATFORM
@@ -19,11 +19,13 @@ static const char* TAG = "MqttTransport";
 static const char* TAG = "MqttTransport";
 #endif
 
-CourierMqttTransport::CourierMqttTransport()
+namespace Courier {
+
+MqttTransport::MqttTransport()
 {
 }
 
-CourierMqttTransport::CourierMqttTransport(const CourierMqttTransportConfig& config)
+MqttTransport::MqttTransport(const Config& config)
     : _certPem(config.cert_pem),
       _topics(config.topics.begin(), config.topics.end())
 {
@@ -35,18 +37,18 @@ CourierMqttTransport::CourierMqttTransport(const CourierMqttTransportConfig& con
     }
 }
 
-void CourierMqttTransport::onConfigure(ConfigureCallback cb)
+void MqttTransport::onConfigure(ConfigureCallback cb)
 {
     _configureCallback = cb;
 }
 
-CourierMqttTransport::~CourierMqttTransport()
+MqttTransport::~MqttTransport()
 {
     destroyClient();
     freeReassemblyBuf();
 }
 
-void CourierMqttTransport::freeReassemblyBuf()
+void MqttTransport::freeReassemblyBuf()
 {
     free(_reassemblyBuf);
     _reassemblyBuf = nullptr;
@@ -54,7 +56,7 @@ void CourierMqttTransport::freeReassemblyBuf()
     _reassemblyPos = 0;
 }
 
-void CourierMqttTransport::destroyClient()
+void MqttTransport::destroyClient()
 {
     if (_client) {
         esp_mqtt_client_stop(_client);
@@ -66,7 +68,7 @@ void CourierMqttTransport::destroyClient()
     _selfHealActive = false;
 }
 
-void CourierMqttTransport::subscribeAll()
+void MqttTransport::subscribeAll()
 {
     if (!_client) return;
     for (const auto& topic : _topics) {
@@ -74,7 +76,7 @@ void CourierMqttTransport::subscribeAll()
     }
 }
 
-void CourierMqttTransport::subscribe(const char* topic, int qos)
+void MqttTransport::subscribe(const char* topic, int qos)
 {
     // Add to list if not already present.
     for (const auto& t : _topics) {
@@ -86,7 +88,7 @@ void CourierMqttTransport::subscribe(const char* topic, int qos)
     }
 }
 
-void CourierMqttTransport::unsubscribe(const char* topic)
+void MqttTransport::unsubscribe(const char* topic)
 {
     for (auto it = _topics.begin(); it != _topics.end(); ++it) {
         if (*it == topic) {
@@ -99,12 +101,12 @@ void CourierMqttTransport::unsubscribe(const char* topic)
     }
 }
 
-bool CourierMqttTransport::publish(const char* topic, const char* payload)
+bool MqttTransport::publish(const char* topic, const char* payload)
 {
     return publish(topic, payload, 0, false);
 }
 
-bool CourierMqttTransport::publish(const char* topic, const char* payload,
+bool MqttTransport::publish(const char* topic, const char* payload,
                                     int qos, bool retain)
 {
     if (!_client || !_connected.load(std::memory_order_acquire)) return false;
@@ -113,7 +115,7 @@ bool CourierMqttTransport::publish(const char* topic, const char* payload,
     return result >= 0;
 }
 
-void CourierMqttTransport::begin(const char* host, uint16_t port, const char* path)
+void MqttTransport::begin(const char* host, uint16_t port, const char* path)
 {
     // Tear down previous client cleanly
     destroyClient();
@@ -157,18 +159,18 @@ void CourierMqttTransport::begin(const char* host, uint16_t port, const char* pa
     esp_mqtt_client_start(_client);
 }
 
-void CourierMqttTransport::disconnect()
+void MqttTransport::disconnect()
 {
     destroyClient();
     _selfHealActive = false;
 }
 
-bool CourierMqttTransport::isConnected() const
+bool MqttTransport::isConnected() const
 {
     return _client && _connected.load(std::memory_order_acquire);
 }
 
-bool CourierMqttTransport::send(const char* payload)
+bool MqttTransport::send(const char* payload)
 {
     if (!_client || !_connected.load(std::memory_order_acquire) ||
         _defaultPublishTopic.empty()) return false;
@@ -177,7 +179,7 @@ bool CourierMqttTransport::send(const char* payload)
     return result >= 0;
 }
 
-void CourierMqttTransport::loop()
+void MqttTransport::loop()
 {
     drainPending();
     if (_selfHealActive) {
@@ -191,7 +193,7 @@ void CourierMqttTransport::loop()
     }
 }
 
-void CourierMqttTransport::suspend()
+void MqttTransport::suspend()
 {
     if (_client) {
         ESP_LOGI(TAG, "Suspending (freeing task stack)");
@@ -200,7 +202,7 @@ void CourierMqttTransport::suspend()
     }
 }
 
-void CourierMqttTransport::resume()
+void MqttTransport::resume()
 {
     if (_client) {
         ESP_LOGI(TAG, "Resuming");
@@ -208,13 +210,13 @@ void CourierMqttTransport::resume()
     }
 }
 
-void CourierMqttTransport::mqttEventHandler(void* handler_arg,
+void MqttTransport::mqttEventHandler(void* handler_arg,
                                               esp_event_base_t base,
                                               int32_t event_id,
                                               void* event_data)
 {
     (void)base;
-    auto* self = (CourierMqttTransport*)handler_arg;
+    auto* self = (MqttTransport*)handler_arg;
     auto* event = (esp_mqtt_event_handle_t)event_data;
 
     switch (event_id) {
@@ -286,3 +288,5 @@ void CourierMqttTransport::mqttEventHandler(void* handler_arg,
         break;
     }
 }
+
+}  // namespace Courier

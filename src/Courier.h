@@ -1,14 +1,19 @@
-#ifndef COURIER_H
-#define COURIER_H
+#ifndef COURIER_CLIENT_H
+#define COURIER_CLIENT_H
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <WiFiManager.h>
-#include "CourierTransport.h"
-#include "CourierWSTransport.h"
-#include "CourierEndpoint.h"
+#include "Transport.h"
+#include "WebSocketTransport.h"
+#include "Endpoint.h"
 
-enum CourierState {
+namespace Courier {
+
+// NOTE: Phase 5 will convert this to `enum class State` with PascalCase
+// values. For now the values keep their COURIER_ prefix so existing
+// references stay intact mid-rename.
+enum State {
   COURIER_BOOTING,
   COURIER_WIFI_CONNECTING,
   COURIER_WIFI_CONNECTED,
@@ -19,7 +24,7 @@ enum CourierState {
   COURIER_CONNECTION_FAILED
 };
 
-struct CourierConfig {
+struct Config {
   const char* host;
   uint16_t port;
   const char* path;
@@ -29,41 +34,41 @@ struct CourierConfig {
   uint32_t dns1;
   uint32_t dns2;
 
-  CourierConfig(const char* host = nullptr,
-                uint16_t port = 443,
-                const char* path = "/",
-                const char* apName = nullptr,
-                const char* defaultTransport = "ws",
-                const char* defaultTopic = nullptr,
-                uint32_t dns1 = 0,
-                uint32_t dns2 = 0)
+  Config(const char* host = nullptr,
+         uint16_t port = 443,
+         const char* path = "/",
+         const char* apName = nullptr,
+         const char* defaultTransport = "ws",
+         const char* defaultTopic = nullptr,
+         uint32_t dns1 = 0,
+         uint32_t dns2 = 0)
       : host(host), port(port), path(path), apName(apName),
         defaultTransport(defaultTransport), defaultTopic(defaultTopic),
         dns1(dns1), dns2(dns2) {}
 };
 
-// NOTE: Only one Courier instance is supported per process. WiFiManager
+// NOTE: Only one Client instance is supported per process. WiFiManager
 // requires a C-style function pointer callback, which necessitates a
-// static instance pointer. Creating multiple Courier instances will
+// static instance pointer. Creating multiple Client instances will
 // produce undefined behavior.
-class Courier {
+class Client {
 public:
   // Callback types
   using Callback = std::function<void()>;
   using MessageCallback = std::function<void(const char* type, JsonDocument& doc)>;
   using RawMessageCallback = std::function<void(const char* payload, size_t length)>;
-  using ConnectionChangeCallback = std::function<void(CourierState state)>;
+  using ConnectionChangeCallback = std::function<void(State state)>;
   using ErrorCallback = std::function<void(const char* category, const char* message)>;
 
-  Courier(const CourierConfig& config);
-  ~Courier();
+  Client(const Config& config);
+  ~Client();
 
   void setup();
   void loop();
 
   // --- State ---
   bool isConnected() const;
-  CourierState getState() const { return _state; }
+  State getState() const { return _state; }
   bool isTimeSynced() const;
 
   // --- Sending ---
@@ -77,17 +82,17 @@ public:
   void setDefaultTopic(const char* topic);
 
   // --- Transports ---
-  void addTransport(const char* name, CourierTransport* transport);
-  CourierTransport* getTransport(const char* name);
+  void addTransport(const char* name, Transport* transport);
+  Transport* getTransport(const char* name);
   void removeTransport(const char* name);
-  void setEndpoint(const char* transportName, const CourierEndpoint& endpoint);
+  void setEndpoint(const char* transportName, const Endpoint& endpoint);
 
   // --- Transport lifecycle ---
   void suspendTransports();
   void resumeTransports();
 
   // --- Built-in WS transport accessor ---
-  CourierWSTransport& builtinWS() { return _builtinWS; }
+  WebSocketTransport& builtinWS() { return _builtinWS; }
 
   // --- Event callbacks (single-slot, last registration wins) ---
   void onMessage(MessageCallback cb);
@@ -109,22 +114,22 @@ public:
   void onConfigureWiFi(WiFiConfigureCallback cb);
 
 private:
-  CourierConfig _config;
-  CourierState _state;
+  Config _config;
+  State _state;
 
   // Transport map (fixed-size array, max 4 transports)
   static constexpr int MAX_TRANSPORTS = 4;
   struct TransportEntry {
     const char* name = nullptr;
-    CourierTransport* transport = nullptr;
-    CourierEndpoint endpoint;
+    Transport* transport = nullptr;
+    Endpoint endpoint;
     bool failed = false;
   };
   TransportEntry _transports[MAX_TRANSPORTS];
   int _transportCount = 0;
 
   // Built-in WS transport
-  CourierWSTransport _builtinWS;
+  WebSocketTransport _builtinWS;
 
   // Default transport/topic for send()
   String _defaultTransport = "ws";
@@ -155,7 +160,7 @@ private:
 
   // Transport message/connection handlers
   void handleTransportMessage(const char* payload, size_t length);
-  void handleTransportConnection(CourierTransport* transport, bool connected);
+  void handleTransportConnection(Transport* transport, bool connected);
 
   // Health monitoring
   struct HealthState {
@@ -198,10 +203,10 @@ private:
   static constexpr uint8_t MAX_RECONNECT_ATTEMPTS = 10;
 
   // Singleton for WiFiManager static callback
-  static Courier* _instance;
+  static Client* _instance;
 
   // State transition — always use this instead of setting _state directly
-  void transitionTo(CourierState newState);
+  void transitionTo(State newState);
 
   // Fire callbacks helpers
   void fireConnectedCallbacks();
@@ -212,10 +217,10 @@ private:
   void fireDidConnectHooks();
 
   // Wire message/connection callbacks onto a transport
-  void wireTransportCallbacks(CourierTransport* transport);
+  void wireTransportCallbacks(Transport* transport);
 
   // Transport failure escalation
-  void handleTransportFailure(CourierTransport* transport);
+  void handleTransportFailure(Transport* transport);
   bool allPersistentTransportsFailed() const;
   void clearTransportFailureFlags();
   void teardownAllTransports();
@@ -225,4 +230,6 @@ private:
   bool _transportsBeginCalled = false;
 };
 
-#endif // COURIER_H
+}  // namespace Courier
+
+#endif // COURIER_CLIENT_H

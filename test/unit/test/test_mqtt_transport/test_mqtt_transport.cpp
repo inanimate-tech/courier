@@ -1,8 +1,10 @@
 #include <unity.h>
-#include <CourierMqttTransport.h>
+#include <MqttTransport.h>
 #include <mqtt_client.h>
 #include <cstring>
 #include <string>
+
+using namespace Courier;
 
 static int deliveredMessageCount = 0;
 static constexpr size_t DELIVERED_BUF_SIZE = 12288;
@@ -20,12 +22,12 @@ static void onMessageCallback(const char* payload, size_t length) {
 static int connectionEventCount = 0;
 static bool lastConnectionState = false;
 
-static void onConnectionCallback(CourierTransport* transport, bool connected) {
+static void onConnectionCallback(Transport* transport, bool connected) {
     connectionEventCount++;
     lastConnectionState = connected;
 }
 
-static CourierMqttTransport* mqtt = nullptr;
+static MqttTransport* mqtt = nullptr;
 
 void setUp(void) {
     MockMqttClient::resetInstanceCount();
@@ -41,7 +43,7 @@ void tearDown(void) {
     mqtt = nullptr;
 }
 
-static CourierMqttTransport* createWithTopics(const char* deviceId = "dev123",
+static MqttTransport* createWithTopics(const char* deviceId = "dev123",
                                                 const char* deviceType = "sensor")
 {
     std::string commandTopic = std::string("devices/") + deviceId + "/command";
@@ -49,20 +51,20 @@ static CourierMqttTransport* createWithTopics(const char* deviceId = "dev123",
     std::string eventTopic   = std::string("devices/") + deviceId + "/event";
     std::string allEvents    = "devices/+/event";
 
-    CourierMqttTransportConfig cfg;
+    MqttTransport::Config cfg;
     cfg.topics = {commandTopic, statusTopic, allEvents};
     cfg.defaultPublishTopic = eventTopic.c_str();
     std::string clientId = std::string(deviceType) + "-" + deviceId;
     cfg.clientId = clientId.c_str();
 
-    auto* t = new CourierMqttTransport(cfg);
+    auto* t = new MqttTransport(cfg);
     t->setMessageCallback(onMessageCallback);
     t->setConnectionCallback(onConnectionCallback);
     return t;
 }
 
 void test_name_is_mqtt() {
-    mqtt = new CourierMqttTransport();
+    mqtt = new MqttTransport();
     TEST_ASSERT_EQUAL_STRING("MQTT", mqtt->name());
 }
 
@@ -82,7 +84,7 @@ void test_begin_sets_client_id() {
 }
 
 void test_begin_without_client_id_uses_empty() {
-    mqtt = new CourierMqttTransport();
+    mqtt = new MqttTransport();
     mqtt->setMessageCallback(onMessageCallback);
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
@@ -197,7 +199,7 @@ void test_send_fails_when_disconnected() {
 }
 
 void test_send_fails_without_publish_topic() {
-    mqtt = new CourierMqttTransport();
+    mqtt = new MqttTransport();
     mqtt->setMessageCallback(onMessageCallback);
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
@@ -415,7 +417,7 @@ void test_second_message_after_drain() {
 }
 
 void test_set_client_id_before_begin() {
-    mqtt = new CourierMqttTransport();
+    mqtt = new MqttTransport();
     mqtt->setMessageCallback(onMessageCallback);
     mqtt->setClientId("my-custom-id");
     mqtt->begin("host", 443, "/path");
@@ -424,7 +426,7 @@ void test_set_client_id_before_begin() {
 }
 
 void test_set_default_publish_topic() {
-    mqtt = new CourierMqttTransport();
+    mqtt = new MqttTransport();
     mqtt->setMessageCallback(onMessageCallback);
     mqtt->setDefaultPublishTopic("my/publish/topic");
     mqtt->begin("host", 443, "/path");
@@ -438,9 +440,9 @@ void test_set_default_publish_topic() {
 
 void test_config_cert_pem_passed_to_mqtt_client() {
     static const char* MY_CERT = "-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n";
-    CourierMqttTransportConfig cfg;
+    MqttTransport::Config cfg;
     cfg.cert_pem = MY_CERT;
-    mqtt = new CourierMqttTransport(cfg);
+    mqtt = new MqttTransport(cfg);
     mqtt->setMessageCallback(onMessageCallback);
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
@@ -448,14 +450,14 @@ void test_config_cert_pem_passed_to_mqtt_client() {
 }
 
 void test_mqtt_no_cert_by_default() {
-    mqtt = new CourierMqttTransport();
+    mqtt = new MqttTransport();
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
     TEST_ASSERT_TRUE(client->cert_pem.empty());
 }
 
 void test_mqtt_on_configure_called_before_init() {
-    mqtt = new CourierMqttTransport();
+    mqtt = new MqttTransport();
     mqtt->setMessageCallback(onMessageCallback);
     bool called = false;
     mqtt->onConfigure([&](esp_mqtt_client_config_t& config) {
@@ -471,9 +473,9 @@ void test_mqtt_on_configure_called_before_init() {
 void test_mqtt_on_configure_can_override_config_cert() {
     static const char* ORIGINAL_CERT = "ORIGINAL";
     static const char* OVERRIDE_CERT = "OVERRIDE";
-    CourierMqttTransportConfig cfg;
+    MqttTransport::Config cfg;
     cfg.cert_pem = ORIGINAL_CERT;
-    mqtt = new CourierMqttTransport(cfg);
+    mqtt = new MqttTransport(cfg);
     mqtt->setMessageCallback(onMessageCallback);
     mqtt->onConfigure([](esp_mqtt_client_config_t& config) {
         config.cert_pem = OVERRIDE_CERT;
@@ -484,7 +486,7 @@ void test_mqtt_on_configure_can_override_config_cert() {
 }
 
 void test_mqtt_on_configure_not_set_works() {
-    mqtt = new CourierMqttTransport();
+    mqtt = new MqttTransport();
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
     TEST_ASSERT_NOT_NULL(client);

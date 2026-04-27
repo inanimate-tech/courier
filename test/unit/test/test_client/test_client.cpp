@@ -1,15 +1,17 @@
 #include <unity.h>
 #include <Courier.h>
-#include <CourierTransport.h>
-#include <CourierMqttTransport.h>
+#include <Transport.h>
+#include <MqttTransport.h>
 #include <mqtt_client.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <cstring>
 #include <vector>
 
+using namespace Courier;
+
 // Minimal mock transport for multi-transport tests
-class MockTransport : public CourierTransport {
+class MockTransport : public Transport {
 public:
     bool _connected = false;
     bool _started = false;
@@ -54,7 +56,7 @@ public:
     }
 };
 
-static Courier* courier = nullptr;
+static Client* courier = nullptr;
 
 static void advanceToConnected() {
     courier->setup();
@@ -75,11 +77,11 @@ void setUp(void) {
     HTTPClient::setDefaultMockHeader("Tue, 18 Feb 2026 12:00:00 GMT");
     Serial.stopCapture();
 
-    CourierConfig config;
+    Config config;
     config.host = "test.example.com";
     config.port = 443;
     config.path = "/ws";
-    courier = new Courier(config);
+    courier = new Client(config);
 }
 
 void tearDown(void) {
@@ -98,7 +100,7 @@ void test_setup_transitions_to_wifi_connecting() {
 }
 
 void test_builtin_ws_registered() {
-    CourierTransport* ws = courier->getTransport("ws");
+    Transport* ws = courier->getTransport("ws");
     TEST_ASSERT_NOT_NULL(ws);
 }
 
@@ -262,7 +264,7 @@ void test_send_to_disconnected() {
 void test_publish_to_mqtt() {
     MockMqttClient::resetInstanceCount();
 
-    CourierMqttTransport mqttTransport;
+    MqttTransport mqttTransport;
     courier->addTransport("mqtt", &mqttTransport);
 
     advanceToConnected();
@@ -320,8 +322,8 @@ void test_on_error_callback_registered() {
 }
 
 void test_connection_change_fires_on_setup() {
-    std::vector<CourierState> states;
-    courier->onConnectionChange([&](CourierState s) {
+    std::vector<State> states;
+    courier->onConnectionChange([&](State s) {
         states.push_back(s);
     });
     courier->setup();
@@ -330,8 +332,8 @@ void test_connection_change_fires_on_setup() {
 }
 
 void test_connection_change_fires_through_to_connected() {
-    std::vector<CourierState> states;
-    courier->onConnectionChange([&](CourierState s) {
+    std::vector<State> states;
+    courier->onConnectionChange([&](State s) {
         states.push_back(s);
     });
     advanceToConnected();
@@ -345,14 +347,14 @@ void test_connection_change_fires_through_to_connected() {
 }
 
 void test_dns_config_defaults_to_zero() {
-    CourierConfig config;
+    Config config;
     config.host = "test.example.com";
     TEST_ASSERT_EQUAL_UINT32(0, config.dns1);
     TEST_ASSERT_EQUAL_UINT32(0, config.dns2);
 }
 
 void test_dns_config_custom_servers() {
-    CourierConfig config;
+    Config config;
     config.host = "test.example.com";
     config.dns1 = (uint32_t)IPAddress(8, 8, 8, 8);
     config.dns2 = (uint32_t)IPAddress(1, 1, 1, 1);

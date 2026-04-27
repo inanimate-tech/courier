@@ -1,31 +1,33 @@
 #ifndef COURIER_MQTT_TRANSPORT_H
 #define COURIER_MQTT_TRANSPORT_H
 
-#include "CourierTransport.h"
+#include "Transport.h"
 #include <mqtt_client.h>
 #include <atomic>
 #include <functional>
 #include <string>
 #include <vector>
 
-// Configuration struct for CourierMqttTransport.
-// topics: auto-subscribed on (re)connect.
-// defaultPublishTopic: if set, send() publishes here.
-// clientId: if set, used as MQTT client ID; otherwise IDF generates one.
-// cert_pem: TLS certificate (nullptr = no cert set by Courier).
-struct CourierMqttTransportConfig {
-    std::vector<std::string> topics;
-    const char* defaultPublishTopic = nullptr;
-    const char* clientId = nullptr;
-    const char* cert_pem = nullptr;
-    int task_stack = 8192;
-};
+namespace Courier {
 
-class CourierMqttTransport : public CourierTransport {
+class MqttTransport : public Transport {
 public:
-    CourierMqttTransport();
-    CourierMqttTransport(const CourierMqttTransportConfig& config);
-    ~CourierMqttTransport();
+    // Configuration struct for MqttTransport.
+    // topics: auto-subscribed on (re)connect.
+    // defaultPublishTopic: if set, send() publishes here.
+    // clientId: if set, used as MQTT client ID; otherwise IDF generates one.
+    // cert_pem: TLS certificate (nullptr = no cert set by Courier).
+    struct Config {
+        std::vector<std::string> topics;
+        const char* defaultPublishTopic = nullptr;
+        const char* clientId = nullptr;
+        const char* cert_pem = nullptr;
+        int task_stack = 8192;
+    };
+
+    MqttTransport();
+    MqttTransport(const Config& config);
+    ~MqttTransport();
 
     void begin(const char* host, uint16_t port, const char* path) override;
     void disconnect() override;
@@ -38,11 +40,7 @@ public:
 
     // Raw IDF config access — called after Courier fills its fields, before init.
     // Use for custom TLS settings, timeouts, etc.
-#ifdef ESP_PLATFORM
     using ConfigureCallback = std::function<void(esp_mqtt_client_config_t&)>;
-#else
-    using ConfigureCallback = std::function<void(esp_mqtt_client_config_t&)>;
-#endif
     void onConfigure(ConfigureCallback cb);
 
     // Set the MQTT client ID (must be called before begin()).
@@ -77,7 +75,7 @@ private:
     esp_mqtt_client_handle_t _client = nullptr;
     std::atomic<bool> _connected{false};
 
-    std::string _configClientId;   // optional override from CourierMqttTransportConfig
+    std::string _configClientId;   // optional override from Config
     std::string _defaultPublishTopic;  // topic for send() broadcast
 
     // Managed topic list — single source of truth for subscriptions.
@@ -97,5 +95,7 @@ private:
                                   int32_t event_id,
                                   void* event_data);
 };
+
+}  // namespace Courier
 
 #endif // COURIER_MQTT_TRANSPORT_H

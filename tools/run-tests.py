@@ -29,7 +29,7 @@ CPPCHECK_SUPPRESSIONS = [
     "noCopyConstructor",
     "noOperatorEq",
     # cppcheck can't evaluate ESP-IDF version macros
-    "syntaxError:*CourierMqttTransport.cpp",
+    "syntaxError:*MqttTransport.cpp",
 ]
 
 

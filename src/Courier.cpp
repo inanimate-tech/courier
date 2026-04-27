@@ -6,10 +6,12 @@
 #include <esp_netif.h>
 #endif
 
-// Static member initialization
-Courier* Courier::_instance = nullptr;
+namespace Courier {
 
-Courier::Courier(const CourierConfig& config)
+// Static member initialization
+Client* Client::_instance = nullptr;
+
+Client::Client(const Config& config)
     : _config(config),
       _state(COURIER_BOOTING),
       _defaultTransport(config.defaultTransport ? config.defaultTransport : "ws"),
@@ -28,7 +30,7 @@ Courier::Courier(const CourierConfig& config)
   _builtinWS.setMessageCallback([this](const char* p, size_t l) {
     handleTransportMessage(p, l);
   });
-  _builtinWS.setConnectionCallback([this](CourierTransport* t, bool c) {
+  _builtinWS.setConnectionCallback([this](Transport* t, bool c) {
     handleTransportConnection(t, c);
   });
   _builtinWS.setFailureCallback([this]() {
@@ -36,11 +38,11 @@ Courier::Courier(const CourierConfig& config)
   });
 }
 
-Courier::~Courier()
+Client::~Client()
 {
 }
 
-void Courier::setup()
+void Client::setup()
 {
   // Setup WiFi mode and DNS
   setupWiFi();
@@ -70,7 +72,7 @@ void Courier::setup()
   transitionTo(COURIER_WIFI_CONNECTING);
 }
 
-void Courier::loop()
+void Client::loop()
 {
   // ezTime NTP maintenance — primary time source. Without continuous re-sync,
   // the ESP32 RTC drifts enough after 2-3 days to break TLS cert validation.
@@ -109,7 +111,7 @@ void Courier::loop()
 
 // --- State handlers ---
 
-void Courier::handleWifiConnectingState()
+void Client::handleWifiConnectingState()
 {
   String configuredSSID = _wm.getWiFiSSID();
   if (configuredSSID.length())
@@ -136,7 +138,7 @@ void Courier::handleWifiConnectingState()
   }
 }
 
-void Courier::handleWifiConfiguringState()
+void Client::handleWifiConfiguringState()
 {
   _wm.process();
   if (!_wm.getConfigPortalActive())
@@ -146,7 +148,7 @@ void Courier::handleWifiConfiguringState()
   }
 }
 
-void Courier::handleWifiConnectedState()
+void Client::handleWifiConnectedState()
 {
   // Configure custom DNS servers if provided (before any HTTPS calls).
   // Uses esp_netif API to set DNS without switching to static IP mode.
@@ -193,7 +195,7 @@ void Courier::handleWifiConnectedState()
   _transportsBeginCalled = false;
 }
 
-void Courier::handleTransportsConnectingState()
+void Client::handleTransportsConnectingState()
 {
   // Begin all transports once (on first entry to this state).
   // begin() starts an async TLS handshake — don't call it again
@@ -248,7 +250,7 @@ void Courier::handleTransportsConnectingState()
   }
 }
 
-void Courier::handleConnectedState()
+void Client::handleConnectedState()
 {
   unsigned long now = millis();
 
@@ -294,7 +296,7 @@ void Courier::handleConnectedState()
   }
 }
 
-void Courier::handleReconnectingState()
+void Client::handleReconnectingState()
 {
   // Fire disconnected callbacks once on entry (safety net — all callers
   // should set this flag and fire callbacks before transitioning)
@@ -348,7 +350,7 @@ void Courier::handleReconnectingState()
   transitionTo(COURIER_WIFI_CONNECTED);
 }
 
-void Courier::handleConnectionFailedState()
+void Client::handleConnectionFailedState()
 {
   // Terminal state - log periodically
   unsigned long now = millis();
@@ -361,19 +363,19 @@ void Courier::handleConnectionFailedState()
 
 // --- WiFi helpers ---
 
-void Courier::setupWiFi()
+void Client::setupWiFi()
 {
   WiFi.mode(WIFI_STA);
   _wm.setConfigPortalBlocking(false);
 }
 
-void Courier::launchWiFiConfigPortal()
+void Client::launchWiFiConfigPortal()
 {
   _wm.startConfigPortal(_apName.c_str());
   transitionTo(COURIER_WIFI_CONFIGURING);
 }
 
-void Courier::staticWifiFailedCallback(WiFiManager* wm)
+void Client::staticWifiFailedCallback(WiFiManager* wm)
 {
   if (_instance)
   {
@@ -387,7 +389,7 @@ void Courier::staticWifiFailedCallback(WiFiManager* wm)
 // header from an HTTPS response to the configured host. NTP (via ezTime
 // events() in loop()) is the primary time source for ongoing accuracy.
 
-bool Courier::syncTimeFromHttpDate()
+bool Client::syncTimeFromHttpDate()
 {
   WiFiClientSecure client;
   client.setInsecure();
@@ -451,7 +453,7 @@ bool Courier::syncTimeFromHttpDate()
 
 // --- Transport message/connection handlers ---
 
-void Courier::handleTransportMessage(const char* payload, size_t length)
+void Client::handleTransportMessage(const char* payload, size_t length)
 {
   // Fire raw message callback
   if (_rawMessageCallback) _rawMessageCallback(payload, length);
@@ -471,7 +473,7 @@ void Courier::handleTransportMessage(const char* payload, size_t length)
   if (_messageCallback) _messageCallback(mtype, doc);
 }
 
-void Courier::handleTransportConnection(CourierTransport* transport, bool connected)
+void Client::handleTransportConnection(Transport* transport, bool connected)
 {
   if (connected) {
     Serial.printf("[courier] %s connected\n", transport->name());
@@ -484,7 +486,7 @@ void Courier::handleTransportConnection(CourierTransport* transport, bool connec
 
 // --- Transport management ---
 
-void Courier::addTransport(const char* name, CourierTransport* transport)
+void Client::addTransport(const char* name, Transport* transport)
 {
   // Check if name already exists (update in place)
   for (int i = 0; i < MAX_TRANSPORTS; i++) {
@@ -506,7 +508,7 @@ void Courier::addTransport(const char* name, CourierTransport* transport)
   }
 }
 
-CourierTransport* Courier::getTransport(const char* name)
+Transport* Client::getTransport(const char* name)
 {
   for (int i = 0; i < _transportCount; i++) {
     if (_transports[i].name && strcmp(_transports[i].name, name) == 0) {
@@ -516,20 +518,20 @@ CourierTransport* Courier::getTransport(const char* name)
   return nullptr;
 }
 
-void Courier::removeTransport(const char* name)
+void Client::removeTransport(const char* name)
 {
   for (int i = 0; i < _transportCount; i++) {
     if (_transports[i].name && strcmp(_transports[i].name, name) == 0) {
       _transports[i].name = nullptr;
       _transports[i].transport = nullptr;
-      _transports[i].endpoint = CourierEndpoint{};
+      _transports[i].endpoint = Endpoint{};
       _transports[i].failed = false;
       return;
     }
   }
 }
 
-void Courier::setEndpoint(const char* transportName, const CourierEndpoint& endpoint)
+void Client::setEndpoint(const char* transportName, const Endpoint& endpoint)
 {
   for (int i = 0; i < _transportCount; i++) {
     if (_transports[i].name && strcmp(_transports[i].name, transportName) == 0) {
@@ -539,7 +541,7 @@ void Courier::setEndpoint(const char* transportName, const CourierEndpoint& endp
   }
 }
 
-void Courier::suspendTransports()
+void Client::suspendTransports()
 {
   for (int i = 0; i < _transportCount; i++) {
     if (_transports[i].transport) {
@@ -548,7 +550,7 @@ void Courier::suspendTransports()
   }
 }
 
-void Courier::resumeTransports()
+void Client::resumeTransports()
 {
   for (int i = 0; i < _transportCount; i++) {
     if (_transports[i].transport) {
@@ -559,9 +561,9 @@ void Courier::resumeTransports()
 
 // --- Sending ---
 
-bool Courier::send(const char* payload)
+bool Client::send(const char* payload)
 {
-  CourierTransport* t = getTransport(_defaultTransport.c_str());
+  Transport* t = getTransport(_defaultTransport.c_str());
   if (!t || !t->isConnected()) return false;
   if (t->topicRequired() && !_defaultTopic.isEmpty()) {
     return t->publish(_defaultTopic.c_str(), payload);
@@ -569,40 +571,40 @@ bool Courier::send(const char* payload)
   return t->send(payload);
 }
 
-bool Courier::sendTo(const char* transportName, const char* payload)
+bool Client::sendTo(const char* transportName, const char* payload)
 {
-  CourierTransport* t = getTransport(transportName);
+  Transport* t = getTransport(transportName);
   if (!t) return false;
   return t->send(payload);
 }
 
-bool Courier::sendBinaryTo(const char* transportName, const uint8_t* data, size_t len)
+bool Client::sendBinaryTo(const char* transportName, const uint8_t* data, size_t len)
 {
-  CourierTransport* t = getTransport(transportName);
+  Transport* t = getTransport(transportName);
   if (!t || !t->isConnected()) return false;
   return t->sendBinary(data, len);
 }
 
-bool Courier::publishTo(const char* transportName, const char* topic, const char* payload)
+bool Client::publishTo(const char* transportName, const char* topic, const char* payload)
 {
-  CourierTransport* t = getTransport(transportName);
+  Transport* t = getTransport(transportName);
   if (!t) return false;
   return t->publish(topic, payload);
 }
 
-void Courier::setDefaultTransport(const char* name)
+void Client::setDefaultTransport(const char* name)
 {
   _defaultTransport = name ? name : "ws";
 }
 
-void Courier::setDefaultTopic(const char* topic)
+void Client::setDefaultTopic(const char* topic)
 {
   _defaultTopic = topic ? topic : "";
 }
 
 // --- State queries ---
 
-bool Courier::isConnected() const
+bool Client::isConnected() const
 {
   for (int i = 0; i < _transportCount; i++) {
     if (_transports[i].transport && _transports[i].transport->isConnected()) {
@@ -612,109 +614,109 @@ bool Courier::isConnected() const
   return false;
 }
 
-bool Courier::isTimeSynced() const
+bool Client::isTimeSynced() const
 {
   return timeStatus() == timeSet;
 }
 
 // --- AP name ---
 
-void Courier::setAPName(const char* name)
+void Client::setAPName(const char* name)
 {
   _apName = name;
 }
 
 // --- Callback registration ---
 
-void Courier::onMessage(MessageCallback cb)
+void Client::onMessage(MessageCallback cb)
 {
   _messageCallback = cb;
 }
 
-void Courier::onRawMessage(RawMessageCallback cb)
+void Client::onRawMessage(RawMessageCallback cb)
 {
   _rawMessageCallback = cb;
 }
 
-void Courier::onConnected(Callback cb)
+void Client::onConnected(Callback cb)
 {
   _connectedCallback = cb;
 }
 
-void Courier::onDisconnected(Callback cb)
+void Client::onDisconnected(Callback cb)
 {
   _disconnectedCallback = cb;
 }
 
-void Courier::onConnectionChange(ConnectionChangeCallback cb)
+void Client::onConnectionChange(ConnectionChangeCallback cb)
 {
   _connectionChangeCallback = cb;
 }
 
-void Courier::onError(ErrorCallback cb)
+void Client::onError(ErrorCallback cb)
 {
   _errorCallback = cb;
 }
 
-void Courier::onTransportsWillConnect(Callback cb)
+void Client::onTransportsWillConnect(Callback cb)
 {
   _willConnectHook = cb;
 }
 
-void Courier::onTransportsDidConnect(Callback cb)
+void Client::onTransportsDidConnect(Callback cb)
 {
   _didConnectHook = cb;
 }
 
-void Courier::onConfigureWiFi(WiFiConfigureCallback cb)
+void Client::onConfigureWiFi(WiFiConfigureCallback cb)
 {
   _wifiConfigureCallback = cb;
 }
 
 // --- Fire callback helpers ---
 
-void Courier::fireConnectedCallbacks()
+void Client::fireConnectedCallbacks()
 {
   if (_connectedCallback) _connectedCallback();
 }
 
-void Courier::fireDisconnectedCallbacks()
+void Client::fireDisconnectedCallbacks()
 {
   if (_disconnectedCallback) _disconnectedCallback();
 }
 
-void Courier::transitionTo(CourierState newState)
+void Client::transitionTo(State newState)
 {
   _state = newState;
   fireConnectionChangeCallbacks();
 }
 
-void Courier::fireConnectionChangeCallbacks()
+void Client::fireConnectionChangeCallbacks()
 {
   if (_connectionChangeCallback) _connectionChangeCallback(_state);
 }
 
-void Courier::fireWillConnectHooks()
+void Client::fireWillConnectHooks()
 {
   if (_willConnectHook) _willConnectHook();
 }
 
-void Courier::fireDidConnectHooks()
+void Client::fireDidConnectHooks()
 {
   if (_didConnectHook) _didConnectHook();
 }
 
-void Courier::fireErrorCallbacks(const char* category, const char* message)
+void Client::fireErrorCallbacks(const char* category, const char* message)
 {
   if (_errorCallback) _errorCallback(category, message);
 }
 
-void Courier::wireTransportCallbacks(CourierTransport* transport)
+void Client::wireTransportCallbacks(Transport* transport)
 {
   transport->setMessageCallback([this](const char* p, size_t l) {
     handleTransportMessage(p, l);
   });
-  transport->setConnectionCallback([this](CourierTransport* t, bool c) {
+  transport->setConnectionCallback([this](Transport* t, bool c) {
     handleTransportConnection(t, c);
   });
   transport->setFailureCallback([this, transport]() {
@@ -724,7 +726,7 @@ void Courier::wireTransportCallbacks(CourierTransport* transport)
 
 // --- Transport failure escalation ---
 
-void Courier::handleTransportFailure(CourierTransport* transport)
+void Client::handleTransportFailure(Transport* transport)
 {
   for (int i = 0; i < _transportCount; i++) {
     if (_transports[i].transport == transport) {
@@ -744,7 +746,7 @@ void Courier::handleTransportFailure(CourierTransport* transport)
   }
 }
 
-bool Courier::allPersistentTransportsFailed() const
+bool Client::allPersistentTransportsFailed() const
 {
   bool anyPersistent = false;
   for (int i = 0; i < _transportCount; i++) {
@@ -756,14 +758,14 @@ bool Courier::allPersistentTransportsFailed() const
   return anyPersistent;
 }
 
-void Courier::clearTransportFailureFlags()
+void Client::clearTransportFailureFlags()
 {
   for (int i = 0; i < _transportCount; i++) {
     _transports[i].failed = false;
   }
 }
 
-void Courier::teardownAllTransports()
+void Client::teardownAllTransports()
 {
   for (int i = 0; i < _transportCount; i++) {
     if (_transports[i].transport) {
@@ -775,7 +777,7 @@ void Courier::teardownAllTransports()
 
 // --- Backoff ---
 
-unsigned long Courier::calculateBackoffInterval(unsigned int attempts)
+unsigned long Client::calculateBackoffInterval(unsigned int attempts)
 {
   unsigned long multiplier = 1UL << min((int)attempts, 8);
   unsigned long interval = MIN_RECONNECT_INTERVAL * multiplier;
@@ -789,3 +791,5 @@ unsigned long Courier::calculateBackoffInterval(unsigned int attempts)
 
   return interval;
 }
+
+}  // namespace Courier

@@ -1,7 +1,7 @@
 #ifndef COURIER_UDP_TRANSPORT_H
 #define COURIER_UDP_TRANSPORT_H
 
-#include "CourierTransport.h"
+#include "Transport.h"
 #include <atomic>
 #include <string>
 
@@ -11,10 +11,12 @@
 #include <AsyncUDP.h>  // Mock for native tests
 #endif
 
-class CourierUDPTransport : public CourierTransport {
+namespace Courier {
+
+class UdpTransport : public Transport {
 public:
-    CourierUDPTransport();
-    ~CourierUDPTransport();
+    UdpTransport();
+    ~UdpTransport();
 
     void begin(const char* host, uint16_t port, const char* path) override;
     void disconnect() override;
@@ -33,5 +35,7 @@ private:
     void joinMulticast();
     void leaveMulticast();
 };
+
+}  // namespace Courier
 
 #endif // COURIER_UDP_TRANSPORT_H

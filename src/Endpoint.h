@@ -3,15 +3,19 @@
 
 #include <cstdint>
 
-struct CourierEndpoint {
+namespace Courier {
+
+struct Endpoint {
   const char* host;
   uint16_t port;
   const char* path;
 
-  CourierEndpoint(const char* host = nullptr,
-                  uint16_t port = 0,
-                  const char* path = nullptr)
+  Endpoint(const char* host = nullptr,
+           uint16_t port = 0,
+           const char* path = nullptr)
       : host(host), port(port), path(path) {}
 };
+
+}  // namespace Courier
 
 #endif // COURIER_ENDPOINT_H

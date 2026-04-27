@@ -1,30 +1,28 @@
 #ifndef COURIER_WS_TRANSPORT_H
 #define COURIER_WS_TRANSPORT_H
 
-#include "CourierTransport.h"
+#include "Transport.h"
 #include <esp_websocket_client.h>
 #include <atomic>
 #include <functional>
 #include <string>
 
-struct CourierWSTransportConfig {
-    const char* cert_pem = nullptr;      // Specific CA cert in PEM format
-    bool use_default_certs = true;       // Use Courier's built-in root CA certs (GTS Root R4)
-};
+namespace Courier {
 
-class CourierWSTransport : public CourierTransport {
+class WebSocketTransport : public Transport {
 public:
-    CourierWSTransport();
-    explicit CourierWSTransport(const CourierWSTransportConfig& config);
-    ~CourierWSTransport();
+    struct Config {
+        const char* cert_pem = nullptr;      // Specific CA cert in PEM format
+        bool use_default_certs = true;       // Use Courier's built-in root CA certs (GTS Root R4)
+    };
+
+    WebSocketTransport();
+    explicit WebSocketTransport(const Config& config);
+    ~WebSocketTransport();
 
     // Raw IDF config access — called after Courier fills its fields, before init.
     // Use for custom headers, subprotocol, ping settings, cert, etc.
-#ifdef ESP_PLATFORM
     using ConfigureCallback = std::function<void(esp_websocket_client_config_t&)>;
-#else
-    using ConfigureCallback = std::function<void(esp_websocket_client_config_t&)>;
-#endif
     void onConfigure(ConfigureCallback cb);
     void useDefaultCerts();  // Use Courier's built-in root CA certs (GTS Root R4)
 
@@ -67,5 +65,7 @@ private:
                                 int32_t event_id,
                                 void* event_data);
 };
+
+}  // namespace Courier
 
 #endif // COURIER_WS_TRANSPORT_H

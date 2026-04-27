@@ -1,11 +1,13 @@
 #include <unity.h>
-#include "CourierSpscQueue.h"
+#include "SpscQueue.h"
+
+using namespace Courier;
 
 void setUp(void) {}
 void tearDown(void) {}
 
 void test_empty_on_construction() {
-    CourierSpscQueue<int, 4> q;
+    SpscQueue<int, 4> q;
     TEST_ASSERT_TRUE(q.empty());
     int out = 99;
     TEST_ASSERT_FALSE(q.pop(out));
@@ -13,7 +15,7 @@ void test_empty_on_construction() {
 }
 
 void test_push_pop_preserves_fifo_order() {
-    CourierSpscQueue<int, 4> q;
+    SpscQueue<int, 4> q;
     TEST_ASSERT_TRUE(q.push(1));
     TEST_ASSERT_TRUE(q.push(2));
     TEST_ASSERT_TRUE(q.push(3));
@@ -26,7 +28,7 @@ void test_push_pop_preserves_fifo_order() {
 }
 
 void test_push_returns_false_when_full() {
-    CourierSpscQueue<int, 3> q;
+    SpscQueue<int, 3> q;
     TEST_ASSERT_TRUE(q.push(10));
     TEST_ASSERT_TRUE(q.push(20));
     TEST_ASSERT_TRUE(q.push(30));
@@ -40,7 +42,7 @@ void test_push_returns_false_when_full() {
 }
 
 void test_wraparound() {
-    CourierSpscQueue<int, 3> q;
+    SpscQueue<int, 3> q;
     int out;
     for (int i = 0; i < 50; ++i) {
         TEST_ASSERT_TRUE(q.push(i));
@@ -51,7 +53,7 @@ void test_wraparound() {
 }
 
 void test_capacity_constant() {
-    TEST_ASSERT_EQUAL(8u, (CourierSpscQueue<int, 8>::capacity()));
+    TEST_ASSERT_EQUAL(8u, (SpscQueue<int, 8>::capacity()));
 }
 
 int main(int, char**) {

@@ -4,6 +4,8 @@
 #include <atomic>
 #include <cstddef>
 
+namespace Courier {
+
 // Lock-free single-producer / single-consumer ring buffer.
 //
 // The transport task pushes; the main loop pops. Only the producer writes
@@ -14,7 +16,7 @@
 // Capacity is the user-visible item count. Internally we reserve one extra
 // slot so that head == tail unambiguously means "empty".
 template <typename T, std::size_t Capacity>
-class CourierSpscQueue {
+class SpscQueue {
     static_assert(Capacity > 0, "Capacity must be positive");
     static constexpr std::size_t N = Capacity + 1;
 
@@ -48,5 +50,7 @@ private:
     std::atomic<std::size_t> _head{0};
     std::atomic<std::size_t> _tail{0};
 };
+
+}  // namespace Courier
 
 #endif // COURIER_SPSC_QUEUE_H

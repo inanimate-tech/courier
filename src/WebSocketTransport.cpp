@@ -1,4 +1,4 @@
-#include "CourierWSTransport.h"
+#include "WebSocketTransport.h"
 #include <cstring>
 
 #ifdef ESP_PLATFORM
@@ -15,7 +15,9 @@ static const char* TAG = "WSTransport";
 static const char* TAG = "WSTransport";
 #endif
 
-CourierWSTransport::CourierWSTransport()
+namespace Courier {
+
+WebSocketTransport::WebSocketTransport()
 {
 }
 
@@ -36,29 +38,29 @@ static const char* GTS_ROOT_R4_PEM =
     "p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD\n"
     "-----END CERTIFICATE-----\n";
 
-CourierWSTransport::CourierWSTransport(const CourierWSTransportConfig& config)
+WebSocketTransport::WebSocketTransport(const Config& config)
     : _certPem(config.cert_pem),
       _useDefaultCerts(config.use_default_certs)
 {
 }
 
-void CourierWSTransport::onConfigure(ConfigureCallback cb)
+void WebSocketTransport::onConfigure(ConfigureCallback cb)
 {
     _configureCallback = cb;
 }
 
-void CourierWSTransport::useDefaultCerts()
+void WebSocketTransport::useDefaultCerts()
 {
     _useDefaultCerts = true;
 }
 
-CourierWSTransport::~CourierWSTransport()
+WebSocketTransport::~WebSocketTransport()
 {
     destroyClient();
     freeReassemblyBuf();
 }
 
-void CourierWSTransport::freeReassemblyBuf()
+void WebSocketTransport::freeReassemblyBuf()
 {
     free(_reassemblyBuf);
     _reassemblyBuf = nullptr;
@@ -66,7 +68,7 @@ void CourierWSTransport::freeReassemblyBuf()
     _reassemblyPos = 0;
 }
 
-void CourierWSTransport::destroyClient()
+void WebSocketTransport::destroyClient()
 {
     _selfHealActive = false;
     if (_client) {
@@ -78,7 +80,7 @@ void CourierWSTransport::destroyClient()
     _connected.store(false, std::memory_order_release);
 }
 
-void CourierWSTransport::begin(const char* host, uint16_t port, const char* path)
+void WebSocketTransport::begin(const char* host, uint16_t port, const char* path)
 {
     // Tear down previous client if reconnecting
     destroyClient();
@@ -116,12 +118,12 @@ void CourierWSTransport::begin(const char* host, uint16_t port, const char* path
     esp_websocket_client_start(_client);
 }
 
-void CourierWSTransport::disconnect()
+void WebSocketTransport::disconnect()
 {
     destroyClient();
 }
 
-void CourierWSTransport::loop()
+void WebSocketTransport::loop()
 {
     drainPending();
 
@@ -136,12 +138,12 @@ void CourierWSTransport::loop()
     }
 }
 
-bool CourierWSTransport::isConnected() const
+bool WebSocketTransport::isConnected() const
 {
     return _connected.load(std::memory_order_acquire);
 }
 
-bool CourierWSTransport::send(const char* payload)
+bool WebSocketTransport::send(const char* payload)
 {
     if (!_connected.load(std::memory_order_acquire) || !_client) return false;
     int result = esp_websocket_client_send_text(_client, payload,
@@ -149,7 +151,7 @@ bool CourierWSTransport::send(const char* payload)
     return result >= 0;
 }
 
-bool CourierWSTransport::sendBinary(const uint8_t* data, size_t len)
+bool WebSocketTransport::sendBinary(const uint8_t* data, size_t len)
 {
     if (!_connected.load(std::memory_order_acquire) || !_client) return false;
     int result = esp_websocket_client_send_bin(_client, (const char*)data,
@@ -157,7 +159,7 @@ bool CourierWSTransport::sendBinary(const uint8_t* data, size_t len)
     return result >= 0;
 }
 
-void CourierWSTransport::suspend()
+void WebSocketTransport::suspend()
 {
     if (_client) {
         ESP_LOGI(TAG, "Suspending (freeing task stack)");
@@ -166,7 +168,7 @@ void CourierWSTransport::suspend()
     }
 }
 
-void CourierWSTransport::resume()
+void WebSocketTransport::resume()
 {
     if (_client) {
         ESP_LOGI(TAG, "Resuming");
@@ -174,13 +176,13 @@ void CourierWSTransport::resume()
     }
 }
 
-void CourierWSTransport::wsEventHandler(void* handler_arg,
+void WebSocketTransport::wsEventHandler(void* handler_arg,
                                           esp_event_base_t base,
                                           int32_t event_id,
                                           void* event_data)
 {
     (void)base;
-    auto* self = (CourierWSTransport*)handler_arg;
+    auto* self = (WebSocketTransport*)handler_arg;
 
     switch (event_id) {
     case WEBSOCKET_EVENT_CONNECTED:
@@ -277,3 +279,5 @@ void CourierWSTransport::wsEventHandler(void* handler_arg,
         break;
     }
 }
+
+}  // namespace Courier
