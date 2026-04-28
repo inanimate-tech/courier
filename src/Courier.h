@@ -4,6 +4,10 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <WiFiManager.h>
+#include <cassert>
+#include <memory>
+#include <type_traits>
+#include <utility>
 #include "Transport.h"
 #include "WebSocketTransport.h"
 #include "Endpoint.h"
@@ -26,8 +30,6 @@ struct Config {
   uint16_t port;
   const char* path;
   const char* apName;
-  const char* defaultTransport;
-  const char* defaultTopic;
   uint32_t dns1;
   uint32_t dns2;
 
@@ -35,12 +37,9 @@ struct Config {
          uint16_t port = 443,
          const char* path = "/",
          const char* apName = nullptr,
-         const char* defaultTransport = "ws",
-         const char* defaultTopic = nullptr,
          uint32_t dns1 = 0,
          uint32_t dns2 = 0)
       : host(host), port(port), path(path), apName(apName),
-        defaultTransport(defaultTransport), defaultTopic(defaultTopic),
         dns1(dns1), dns2(dns2) {}
 };
 
@@ -53,7 +52,6 @@ public:
   // Callback types
   using Callback = std::function<void()>;
   using MessageCallback = std::function<void(const char* type, JsonDocument& doc)>;
-  using RawMessageCallback = std::function<void(const char* payload, size_t length)>;
   using ConnectionChangeCallback = std::function<void(State state)>;
   using ErrorCallback = std::function<void(const char* category, const char* message)>;
 
@@ -68,32 +66,37 @@ public:
   State getState() const { return _state; }
   bool isTimeSynced() const;
 
-  // --- Sending ---
-  bool send(const char* payload);
-  bool sendTo(const char* transportName, const char* payload);
-  bool sendBinaryTo(const char* transportName, const uint8_t* data, size_t len);
-  bool publishTo(const char* transportName, const char* topic, const char* payload);
-
-  // --- Default transport/topic ---
-  void setDefaultTransport(const char* name);
-  void setDefaultTopic(const char* topic);
-
   // --- Transports ---
-  void addTransport(const char* name, Transport* transport);
-  Transport* getTransport(const char* name);
+  // Construct a transport in-place, register under `name`, return ref.
+  // Asserts if the name is already registered or the registry is full.
+  template<typename T, typename... Args>
+  T& addTransport(const char* name, Args&&... args) {
+    static_assert(std::is_base_of<Transport, T>::value,
+                  "T must derive from Courier::Transport");
+    T* t = new T(std::forward<Args>(args)...);
+    attachTransport(name, t);
+    return *t;
+  }
+
+  // Typed lookup. Asserts if `name` is not registered. The type T must
+  // match the type used at addTransport<T>(); mistyped lookup is UB.
+  // (ESP32 builds default to -fno-rtti, so dynamic_cast is unavailable.
+  // Caller knows the type they registered.)
+  template<typename T>
+  T& transport(const char* name) {
+    Transport* base = lookupTransport(name);
+    assert(base != nullptr && "transport name not registered");
+    return *static_cast<T*>(base);
+  }
+
   void removeTransport(const char* name);
-  void setEndpoint(const char* transportName, const Endpoint& endpoint);
 
   // --- Transport lifecycle ---
-  void suspendTransports();
-  void resumeTransports();
-
-  // --- Built-in WS transport accessor ---
-  WebSocketTransport& builtinWS() { return _builtinWS; }
+  void suspend();
+  void resume();
 
   // --- Event callbacks (single-slot, last registration wins) ---
   void onMessage(MessageCallback cb);
-  void onRawMessage(RawMessageCallback cb);
   void onConnected(Callback cb);
   void onDisconnected(Callback cb);
   void onConnectionChange(ConnectionChangeCallback cb);
@@ -114,23 +117,21 @@ private:
   Config _config;
   State _state;
 
-  // Transport map (fixed-size array, max 4 transports)
+  // Transport map (fixed-size array, max 4 transports).
+  // Client owns registered transports via unique_ptr.
   static constexpr int MAX_TRANSPORTS = 4;
   struct TransportEntry {
     const char* name = nullptr;
-    Transport* transport = nullptr;
+    std::unique_ptr<Transport> transport;
     Endpoint endpoint;
     bool failed = false;
   };
   TransportEntry _transports[MAX_TRANSPORTS];
   int _transportCount = 0;
 
-  // Built-in WS transport
-  WebSocketTransport _builtinWS;
-
-  // Default transport/topic for send()
-  String _defaultTransport = "ws";
-  String _defaultTopic;
+  // Internal registry helpers
+  void attachTransport(const char* name, Transport* t);   // takes ownership
+  Transport* lookupTransport(const char* name);
 
   // WiFi
   WiFiManager _wm;
@@ -155,8 +156,8 @@ private:
   bool syncTimeFromHttpDate();
   bool _timeSyncAttempted = false;
 
-  // Transport message/connection handlers
-  void handleTransportMessage(const char* payload, size_t length);
+  // JSON dispatch — wired via Transport::setClientHook in attachTransport.
+  void dispatchJSON(const char* payload, size_t length);
   void handleTransportConnection(Transport* transport, bool connected);
 
   // Health monitoring
@@ -177,7 +178,6 @@ private:
 
   // Callback storage (all single-slot)
   MessageCallback _messageCallback;
-  RawMessageCallback _rawMessageCallback;
   Callback _connectedCallback;
   Callback _disconnectedCallback;
   ConnectionChangeCallback _connectionChangeCallback;
@@ -212,9 +212,6 @@ private:
   void fireErrorCallbacks(const char* category, const char* message);
   void fireWillConnectHooks();
   void fireDidConnectHooks();
-
-  // Wire message/connection callbacks onto a transport
-  void wireTransportCallbacks(Transport* transport);
 
   // Transport failure escalation
   void handleTransportFailure(Transport* transport);

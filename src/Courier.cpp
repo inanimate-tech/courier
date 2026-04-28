@@ -14,28 +14,14 @@ Client* Client::_instance = nullptr;
 Client::Client(const Config& config)
     : _config(config),
       _state(State::Booting),
-      _defaultTransport(config.defaultTransport ? config.defaultTransport : "ws"),
-      _defaultTopic(config.defaultTopic ? config.defaultTopic : ""),
       _health{},
       _reconnect{}
 {
   _instance = this;
 
-  // Pre-register the built-in WS transport as "ws"
-  _transports[0].name = "ws";
-  _transports[0].transport = &_builtinWS;
-  _transportCount = 1;
-
-  // Wire callbacks on built-in WS transport
-  _builtinWS.setMessageCallback([this](const char* p, size_t l) {
-    handleTransportMessage(p, l);
-  });
-  _builtinWS.setConnectionCallback([this](Transport* t, bool c) {
-    handleTransportConnection(t, c);
-  });
-  _builtinWS.setFailureCallback([this]() {
-    handleTransportFailure(&_builtinWS);
-  });
+  // Auto-register the built-in WS transport as "ws".
+  // Phase 9 will make this conditional on _config.host being set.
+  addTransport<WebSocketTransport>("ws");
 }
 
 Client::~Client()
@@ -453,24 +439,16 @@ bool Client::syncTimeFromHttpDate()
 
 // --- Transport message/connection handlers ---
 
-void Client::handleTransportMessage(const char* payload, size_t length)
+void Client::dispatchJSON(const char* payload, size_t length)
 {
-  // Fire raw message callback
-  if (_rawMessageCallback) _rawMessageCallback(payload, length);
-
-  // Parse JSON
+  if (!_messageCallback) return;
   JsonDocument doc;
-  if (auto err = deserializeJson(doc, payload, length))
-  {
-    Serial.print("[courier] Invalid JSON: ");
-    Serial.println(err.c_str());
+  if (auto err = deserializeJson(doc, payload, length)) {
+    // Not JSON — silently drop. Per-transport hooks still saw the raw bytes.
     return;
   }
-
   const char* mtype = doc["type"] | "";
-
-  // Fire typed message callback
-  if (_messageCallback) _messageCallback(mtype, doc);
+  _messageCallback(mtype, doc);
 }
 
 void Client::handleTransportConnection(Transport* transport, bool connected)
@@ -486,33 +464,45 @@ void Client::handleTransportConnection(Transport* transport, bool connected)
 
 // --- Transport management ---
 
-void Client::addTransport(const char* name, Transport* transport)
+void Client::attachTransport(const char* name, Transport* transport)
 {
-  // Check if name already exists (update in place)
+  // Find first empty slot. Asserts on full registry or duplicate name.
   for (int i = 0; i < MAX_TRANSPORTS; i++) {
     if (_transports[i].name && strcmp(_transports[i].name, name) == 0) {
-      _transports[i].transport = transport;
-      wireTransportCallbacks(transport);
+      assert(false && "transport name already registered");
+      delete transport;
       return;
     }
   }
-  // Find first empty slot
   for (int i = 0; i < MAX_TRANSPORTS; i++) {
     if (!_transports[i].name) {
       _transports[i].name = name;
-      _transports[i].transport = transport;
-      wireTransportCallbacks(transport);
+      _transports[i].transport.reset(transport);
       if (i >= _transportCount) _transportCount = i + 1;
+
+      // Wire JSON dispatch via the internal hook slot. The user-facing
+      // _onMessage slot stays free for per-transport hooks (Phase 8).
+      transport->setClientHook([this](const char* p, size_t l) {
+        dispatchJSON(p, l);
+      });
+      transport->setConnectionCallback([this](Transport* t, bool c) {
+        handleTransportConnection(t, c);
+      });
+      transport->setFailureCallback([this, transport]() {
+        handleTransportFailure(transport);
+      });
       return;
     }
   }
+  assert(false && "transport registry full");
+  delete transport;
 }
 
-Transport* Client::getTransport(const char* name)
+Transport* Client::lookupTransport(const char* name)
 {
   for (int i = 0; i < _transportCount; i++) {
     if (_transports[i].name && strcmp(_transports[i].name, name) == 0) {
-      return _transports[i].transport;
+      return _transports[i].transport.get();
     }
   }
   return nullptr;
@@ -523,7 +513,7 @@ void Client::removeTransport(const char* name)
   for (int i = 0; i < _transportCount; i++) {
     if (_transports[i].name && strcmp(_transports[i].name, name) == 0) {
       _transports[i].name = nullptr;
-      _transports[i].transport = nullptr;
+      _transports[i].transport.reset();
       _transports[i].endpoint = Endpoint{};
       _transports[i].failed = false;
       return;
@@ -531,17 +521,7 @@ void Client::removeTransport(const char* name)
   }
 }
 
-void Client::setEndpoint(const char* transportName, const Endpoint& endpoint)
-{
-  for (int i = 0; i < _transportCount; i++) {
-    if (_transports[i].name && strcmp(_transports[i].name, transportName) == 0) {
-      _transports[i].endpoint = endpoint;
-      return;
-    }
-  }
-}
-
-void Client::suspendTransports()
+void Client::suspend()
 {
   for (int i = 0; i < _transportCount; i++) {
     if (_transports[i].transport) {
@@ -550,56 +530,13 @@ void Client::suspendTransports()
   }
 }
 
-void Client::resumeTransports()
+void Client::resume()
 {
   for (int i = 0; i < _transportCount; i++) {
     if (_transports[i].transport) {
       _transports[i].transport->resume();
     }
   }
-}
-
-// --- Sending ---
-
-bool Client::send(const char* payload)
-{
-  Transport* t = getTransport(_defaultTransport.c_str());
-  if (!t || !t->isConnected()) return false;
-  if (t->topicRequired() && !_defaultTopic.isEmpty()) {
-    return t->publish(_defaultTopic.c_str(), payload);
-  }
-  return t->send(payload);
-}
-
-bool Client::sendTo(const char* transportName, const char* payload)
-{
-  Transport* t = getTransport(transportName);
-  if (!t) return false;
-  return t->send(payload);
-}
-
-bool Client::sendBinaryTo(const char* transportName, const uint8_t* data, size_t len)
-{
-  Transport* t = getTransport(transportName);
-  if (!t || !t->isConnected()) return false;
-  return t->sendBinary(data, len);
-}
-
-bool Client::publishTo(const char* transportName, const char* topic, const char* payload)
-{
-  Transport* t = getTransport(transportName);
-  if (!t) return false;
-  return t->publish(topic, payload);
-}
-
-void Client::setDefaultTransport(const char* name)
-{
-  _defaultTransport = name ? name : "ws";
-}
-
-void Client::setDefaultTopic(const char* topic)
-{
-  _defaultTopic = topic ? topic : "";
 }
 
 // --- State queries ---
@@ -631,11 +568,6 @@ void Client::setAPName(const char* name)
 void Client::onMessage(MessageCallback cb)
 {
   _messageCallback = cb;
-}
-
-void Client::onRawMessage(RawMessageCallback cb)
-{
-  _rawMessageCallback = cb;
 }
 
 void Client::onConnected(Callback cb)
@@ -711,25 +643,12 @@ void Client::fireErrorCallbacks(const char* category, const char* message)
   if (_errorCallback) _errorCallback(category, message);
 }
 
-void Client::wireTransportCallbacks(Transport* transport)
-{
-  transport->setMessageCallback([this](const char* p, size_t l) {
-    handleTransportMessage(p, l);
-  });
-  transport->setConnectionCallback([this](Transport* t, bool c) {
-    handleTransportConnection(t, c);
-  });
-  transport->setFailureCallback([this, transport]() {
-    handleTransportFailure(transport);
-  });
-}
-
 // --- Transport failure escalation ---
 
 void Client::handleTransportFailure(Transport* transport)
 {
   for (int i = 0; i < _transportCount; i++) {
-    if (_transports[i].transport == transport) {
+    if (_transports[i].transport.get() == transport) {
       _transports[i].failed = true;
       Serial.printf("[courier] Transport '%s' reported failure\n", _transports[i].name);
       break;

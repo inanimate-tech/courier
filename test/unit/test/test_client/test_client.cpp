@@ -100,26 +100,20 @@ void test_setup_transitions_to_wifi_connecting() {
 }
 
 void test_builtin_ws_registered() {
-    Transport* ws = courier->getTransport("ws");
-    TEST_ASSERT_NOT_NULL(ws);
+    // transport<>() asserts on miss; surviving the call confirms registration.
+    (void)courier->transport<WebSocketTransport>("ws");
 }
 
-void test_add_transport() {
-    MockTransport mt;
-    courier->addTransport("custom", &mt);
-    TEST_ASSERT_EQUAL_PTR(&mt, courier->getTransport("custom"));
+void test_add_transport_returns_typed_ref() {
+    auto& mt = courier->addTransport<MockTransport>("custom");
+    TEST_ASSERT_EQUAL_PTR(&mt, &courier->transport<MockTransport>("custom"));
 }
 
-void test_remove_transport() {
-    MockTransport mt;
-    courier->addTransport("custom", &mt);
-    TEST_ASSERT_NOT_NULL(courier->getTransport("custom"));
+void test_remove_transport_frees_slot() {
+    courier->addTransport<MockTransport>("custom");
     courier->removeTransport("custom");
-    TEST_ASSERT_NULL(courier->getTransport("custom"));
-}
-
-void test_get_transport_unknown() {
-    TEST_ASSERT_NULL(courier->getTransport("nonexistent"));
+    // Slot freed — re-adding the same name succeeds (would assert if still present).
+    courier->addTransport<MockTransport>("custom");
 }
 
 void test_on_message_callback() {
@@ -159,63 +153,17 @@ void test_on_message_single_slot() {
     TEST_ASSERT_EQUAL(1, callCount2);  // last registration wins
 }
 
-void test_on_raw_message_callback() {
-    int callCount = 0;
-    std::string receivedPayload;
-    size_t receivedLength = 0;
-
-    courier->onRawMessage([&](const char* payload, size_t length) {
-        callCount++;
-        receivedPayload = std::string(payload, length);
-        receivedLength = length;
-    });
-
+void test_onMessage_only_fires_for_json() {
+    int jsonCount = 0;
+    courier->onMessage([&](const char* type, JsonDocument& doc) { jsonCount++; });
     advanceToConnected();
-
-    const char* msg = "{\"type\":\"raw_test\",\"data\":123}";
     auto* mock = MockWebSocketClient::lastInstance();
-    mock->simulateTextMessage(msg);
+    mock->simulateTextMessage("not json");
     courier->loop();
-
-    TEST_ASSERT_EQUAL(1, callCount);
-    TEST_ASSERT_EQUAL_STRING(msg, receivedPayload.c_str());
-    TEST_ASSERT_EQUAL(strlen(msg), receivedLength);
-}
-
-void test_send_text_when_connected() {
-    advanceToConnected();
-
-    bool result = courier->send("{\"hello\":true}");
-    TEST_ASSERT_TRUE(result);
-
-    auto* mock = MockWebSocketClient::lastInstance();
-    TEST_ASSERT_EQUAL(1, mock->sendCount);
-    TEST_ASSERT_EQUAL_STRING("{\"hello\":true}", mock->sentMessages[0].c_str());
-}
-
-void test_send_text_when_disconnected() {
-    courier->setup();
-    bool result = courier->send("{\"hello\":true}");
-    TEST_ASSERT_FALSE(result);
-}
-
-void test_send_targets_default_transport() {
-    MockTransport mt;
-    courier->addTransport("extra", &mt);
-
-    advanceToConnected();
-
-    mt.simulateConnect();
-    mt.loop();
-
-    bool result = courier->send("{\"targeted\":true}");
-    TEST_ASSERT_TRUE(result);
-
-    auto* wsMock = MockWebSocketClient::lastInstance();
-    TEST_ASSERT_EQUAL(1, wsMock->sendCount);
-    TEST_ASSERT_EQUAL_STRING("{\"targeted\":true}", wsMock->sentMessages[0].c_str());
-
-    TEST_ASSERT_EQUAL(0, mt.sendCount);
+    TEST_ASSERT_EQUAL(0, jsonCount);
+    mock->simulateTextMessage("{\"type\":\"x\"}");
+    courier->loop();
+    TEST_ASSERT_EQUAL(1, jsonCount);
 }
 
 void test_suspend_resume() {
@@ -224,74 +172,12 @@ void test_suspend_resume() {
     auto* mock = MockWebSocketClient::lastInstance();
     TEST_ASSERT_TRUE(mock->started);
 
-    courier->suspendTransports();
+    courier->suspend();
     TEST_ASSERT_TRUE(mock->stopped);
     TEST_ASSERT_FALSE(mock->started);
 
-    courier->resumeTransports();
+    courier->resume();
     TEST_ASSERT_TRUE(mock->started);
-}
-
-void test_send_to_named_transport() {
-    advanceToConnected();
-
-    bool result = courier->sendTo("ws", "{\"targeted\":true}");
-    TEST_ASSERT_TRUE(result);
-
-    auto* mock = MockWebSocketClient::lastInstance();
-    TEST_ASSERT_EQUAL(1, mock->sendCount);
-    TEST_ASSERT_EQUAL_STRING("{\"targeted\":true}", mock->sentMessages[0].c_str());
-}
-
-void test_send_to_unknown_transport() {
-    advanceToConnected();
-
-    bool result = courier->sendTo("nonexistent", "{\"x\":1}");
-    TEST_ASSERT_FALSE(result);
-}
-
-void test_send_to_disconnected() {
-    MockTransport mt;
-    courier->addTransport("extra", &mt);
-
-    advanceToConnected();
-
-    bool result = courier->sendTo("extra", "{\"x\":1}");
-    TEST_ASSERT_FALSE(result);
-    TEST_ASSERT_EQUAL(0, mt.sendCount);
-}
-
-void test_publish_to_mqtt() {
-    MockMqttClient::resetInstanceCount();
-
-    MqttTransport mqttTransport;
-    courier->addTransport("mqtt", &mqttTransport);
-
-    advanceToConnected();
-
-    mqttTransport.begin("test.example.com", 443, "/mqtt");
-    auto* mqttMock = MockMqttClient::lastInstance();
-    TEST_ASSERT_NOT_NULL(mqttMock);
-    mqttMock->simulateConnect();
-
-    TEST_ASSERT_TRUE(mqttTransport.isConnected());
-
-    bool result = courier->publishTo("mqtt", "my/topic", "{\"msg\":1}");
-    TEST_ASSERT_TRUE(result);
-    TEST_ASSERT_EQUAL_STRING("my/topic", mqttMock->lastPublishTopic.c_str());
-    TEST_ASSERT_EQUAL_STRING("{\"msg\":1}", mqttMock->lastPublishPayload.c_str());
-    TEST_ASSERT_EQUAL(1, mqttMock->publishCount);
-}
-
-void test_publish_to_non_mqtt() {
-    advanceToConnected();
-
-    bool result = courier->publishTo("ws", "ignored/topic", "{\"fallback\":true}");
-    TEST_ASSERT_TRUE(result);
-
-    auto* mock = MockWebSocketClient::lastInstance();
-    TEST_ASSERT_EQUAL(1, mock->sendCount);
-    TEST_ASSERT_EQUAL_STRING("{\"fallback\":true}", mock->sentMessages[0].c_str());
 }
 
 void test_on_error_callback_registered() {
@@ -368,21 +254,12 @@ int main(int argc, char** argv) {
     RUN_TEST(test_initial_state);
     RUN_TEST(test_setup_transitions_to_wifi_connecting);
     RUN_TEST(test_builtin_ws_registered);
-    RUN_TEST(test_add_transport);
-    RUN_TEST(test_remove_transport);
-    RUN_TEST(test_get_transport_unknown);
+    RUN_TEST(test_add_transport_returns_typed_ref);
+    RUN_TEST(test_remove_transport_frees_slot);
     RUN_TEST(test_on_message_callback);
     RUN_TEST(test_on_message_single_slot);
-    RUN_TEST(test_on_raw_message_callback);
-    RUN_TEST(test_send_text_when_connected);
-    RUN_TEST(test_send_text_when_disconnected);
-    RUN_TEST(test_send_targets_default_transport);
+    RUN_TEST(test_onMessage_only_fires_for_json);
     RUN_TEST(test_suspend_resume);
-    RUN_TEST(test_send_to_named_transport);
-    RUN_TEST(test_send_to_unknown_transport);
-    RUN_TEST(test_send_to_disconnected);
-    RUN_TEST(test_publish_to_mqtt);
-    RUN_TEST(test_publish_to_non_mqtt);
     RUN_TEST(test_on_error_callback_registered);
     RUN_TEST(test_connection_change_fires_on_setup);
     RUN_TEST(test_connection_change_fires_through_to_connected);

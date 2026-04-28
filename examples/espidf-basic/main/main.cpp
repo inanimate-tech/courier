@@ -14,7 +14,6 @@ Courier::Config makeConfig() {
 }
 
 Courier::Client courier(makeConfig());
-Courier::MqttTransport mqtt;
 
 extern "C" void app_main() {
     // Bring up the Arduino runtime (Wi-Fi stack, timers, etc.) that courier
@@ -22,12 +21,14 @@ extern "C" void app_main() {
     // example uses app_main() directly instead of Arduino's setup()/loop().
     initArduino();
 
-    mqtt.subscribe("devices/my-device/command");
-    mqtt.setDefaultPublishTopic("devices/my-device/event");
-    mqtt.setClientId("my-device-001");
+    Courier::MqttTransport::Config mqttCfg;
+    mqttCfg.topics = {"devices/my-device/command"};
+    mqttCfg.clientId = "my-device-001";
+    courier.addTransport<Courier::MqttTransport>("mqtt", mqttCfg);
 
     courier.onConnected([]() {
-        courier.send(R"({"type":"hello"})");
+        courier.transport<Courier::WebSocketTransport>("ws")
+            .send(R"({"type":"hello"})");
     });
 
     courier.onMessage([](const char* type, JsonDocument& doc) {
@@ -38,7 +39,6 @@ extern "C" void app_main() {
         // Handle errors
     });
 
-    courier.addTransport("mqtt", &mqtt);
     courier.setup();
 
     while (true) {

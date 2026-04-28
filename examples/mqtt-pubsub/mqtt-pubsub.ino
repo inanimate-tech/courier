@@ -10,10 +10,17 @@ Courier::Config makeConfig() {
 }
 
 Courier::Client courier(makeConfig());
-Courier::MqttTransport mqtt;
 
-// Configure MQTT broker credentials via raw IDF config access
-void configureMqtt() {
+void setup() {
+  Serial.begin(115200);
+
+  // Build the MQTT transport via Client. addTransport<T> constructs in
+  // place, registers under the name, and returns a typed reference.
+  Courier::MqttTransport::Config mqttCfg;
+  mqttCfg.topics = {"sensors/+/data", "commands/my-device"};
+  mqttCfg.clientId = "my-device-001";
+  auto& mqtt = courier.addTransport<Courier::MqttTransport>("mqtt", mqttCfg);
+
   mqtt.onConfigure([](esp_mqtt_client_config_t& cfg) {
     // Set username/password, LWT, keepalive, etc.
     // These fields map directly to the ESP-IDF MQTT client config.
@@ -28,17 +35,6 @@ void configureMqtt() {
     cfg.password = "my-password";
 #endif
   });
-}
-
-void setup() {
-  Serial.begin(115200);
-
-  mqtt.subscribe("sensors/+/data");
-  mqtt.subscribe("commands/my-device");
-  mqtt.setDefaultPublishTopic("sensors/my-device/data");
-  mqtt.setClientId("my-device-001");
-
-  configureMqtt();
 
   courier.onConnected([]() {
     Serial.println("Connected!");
@@ -47,13 +43,6 @@ void setup() {
   courier.onMessage([](const char* type, JsonDocument& doc) {
     Serial.printf("Message type: %s\n", type);
   });
-
-  // Add MQTT transport before setup
-  courier.addTransport("mqtt", &mqtt);
-
-  Courier::Endpoint mqttEndpoint;
-  mqttEndpoint.path = "/mqtt";
-  courier.setEndpoint("mqtt", mqttEndpoint);
 
   courier.setup();
 }
@@ -65,14 +54,14 @@ void loop() {
   static unsigned long lastPublish = 0;
   if (millis() - lastPublish > 10000 && courier.isConnected()) {
     lastPublish = millis();
-    mqtt.publish("sensors/my-device/data",
-                 R"({"type":"reading","temp":22.5})");
+    courier.transport<Courier::MqttTransport>("mqtt")
+        .publish("sensors/my-device/data", R"({"type":"reading","temp":22.5})");
   }
 
   // Dynamic subscription example
   static bool subscribed = false;
   if (!subscribed && courier.isConnected()) {
     subscribed = true;
-    mqtt.subscribe("alerts/critical", 1);  // QoS 1
+    courier.transport<Courier::MqttTransport>("mqtt").subscribe("alerts/critical", 1);
   }
 }

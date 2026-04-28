@@ -20,3 +20,7 @@ examples/**/CMakeLists.txt
 !examples/espidf-basic/main/CMakeLists.txt
 # Arduino library deps fetched by fetch-arduino-deps.sh — not vendored
 examples/espidf-basic/components/
+# Per-example clangd index caches and the bare sdkconfig (the parameterised
+# variants are already ignored above).
+**/.cache/
+sdkconfig

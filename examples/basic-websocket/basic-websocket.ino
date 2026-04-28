@@ -15,7 +15,8 @@ void setup() {
 
   courier.onConnected([]() {
     Serial.println("Connected!");
-    courier.send(R"({"type":"hello","msg":"world"})");
+    courier.transport<Courier::WebSocketTransport>("ws")
+        .send(R"({"type":"hello","msg":"world"})");
   });
 
   courier.onDisconnected([]() {
