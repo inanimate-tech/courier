@@ -25,24 +25,58 @@ Header files renamed to drop the `Courier` prefix: `CourierWSTransport.h` → `W
 
 **State enum.** `enum CourierState` (with `COURIER_BOOTING` etc.) is now `enum class Courier::State` with PascalCase values (`Booting`, `WifiConnecting`, `Connected`, `Reconnecting`, `ConnectionFailed`, etc.).
 
-**Client surface contraction.** Removed from `Courier::Client`:
+**Client surface changes.** Permanently removed from `Courier::Client`:
 
-- `send(payload)`, `sendTo(name, payload)`, `sendBinaryTo(name, data, len)`, `publishTo(name, topic, payload)` — call methods on the transport directly via `transport<T>(name)`.
-- `setDefaultTransport(name)`, `setDefaultTopic(topic)` — no implicit routing.
+- `sendTo(name, payload)`, `sendBinaryTo(name, data, len)`, `publishTo(name, topic, payload)` — use `transport<T>(name).send(doc)` or transport-specific methods.
+- `setDefaultTopic(topic)` — topic is now per-call via `SendOptions.topic`.
 - `setEndpoint(name, endpoint)` — call `transport.begin(host, port, path)` when ready.
 - `builtinWS()` — access via `transport<WebSocketTransport>("ws")`.
 - `onRawMessage`, `onBinaryMessage` — moved to per-transport hooks.
-- `Config::defaultTransport`, `Config::defaultTopic` fields — removed.
+- `Config::defaultTopic` field — removed; topic is per-call.
+
+Returned / reshaped on `Courier::Client`:
+
+- `Client::send(JsonDocument&)` and `Client::send(JsonDocument&, const SendOptions&)` — JSON-first send, routes via `Config::defaultTransport`.
+- `setDefaultTransport(name)` — runtime override for the default transport.
+- `Config::defaultTransport` field — returned (was removed in an earlier pass).
+
+**`MessageCallback` signature change.** Gains `transportName` as the first argument:
+
+Old: `void(const char* type, JsonDocument& doc)`  
+New: `void(const char* transportName, const char* type, JsonDocument& doc)`
+
+Update every `onMessage` registration.
+
+**`Transport::send` base virtual changed signature.** Custom transport subclasses must update:
+
+Old: `bool send(const char* payload) = 0`  
+New: `bool send(JsonDocument& doc, const SendOptions& options = {}) = 0`
+
+**Surfaces removed from `Transport` base.** No longer present on the abstract base (subclass-specific only):
+
+- `sendBinary(data, len)` — `WebSocketTransport`-specific; not on base.
+- `publish(topic, payload)` — `MqttTransport`-specific; not on base.
+- `topicRequired()` — no longer needed.
+
+**`WebSocketTransport::send(const char*)` renamed.** Raw text frame delivery is now `sendText(const char*)`. `send(JsonDocument&, opts)` takes the name `send` as the base-virtual override (serializes and calls `sendText`).
 
 **Transport registry.** `addTransport(name, Transport*)` is now templated `addTransport<T>(name, args...)` — Client constructs and owns the transport, returns a typed reference. `getTransport(name)` is replaced by `transport<T>(name)` which returns `T&` (asserts on miss). Client owns registered transports via `std::unique_ptr`.
 
 **Lifecycle method rename.** `suspendTransports()` / `resumeTransports()` → `suspend()` / `resume()`.
 
-**MqttTransport surface.** Removed `MqttTransport::send()` and `MqttTransport::setDefaultPublishTopic()`. Every publish spells out the topic via `mqtt.publish(topic, payload[, qos, retain])`. The `send()` no-op override exists only because `Transport::send` is pure-virtual on the base.
+**MqttTransport surface.** Removed `MqttTransport::setDefaultPublishTopic()`. Topic is now per-call: pass `opts.topic` through `Client::send(doc, opts)`, or spell it directly on `mqtt.publish(topic, ...)`.
 
 **Built-in WS now opt-in.** Previously the Client always registered a WebSocketTransport as `"ws"`. Now it only does so if `Config::host` is non-null and non-empty. Stacks that don't use the built-in WS just leave `host` null and add their transports explicitly.
 
 ### New
+
+**JSON-first send sugar.** `Client::send(JsonDocument&)` and `Client::send(JsonDocument&, const SendOptions&)` route to the transport named by `Config::defaultTransport` (or the runtime override set by `setDefaultTransport`). WS users call `courier.send(doc)`. MQTT users pass `opts.topic` per call.
+
+**`Courier::SendOptions` struct.** `{const char* topic; int qos; bool retain;}` — per-call options for `send`. Defined in `<Transport.h>`. `topic` is required for MQTT; `qos` and `retain` are MQTT-only; all fields are ignored by WS and UDP.
+
+**`MqttTransport::publish` JSON overload.** `publish(topic, JsonDocument&, qos, retain)` serializes and publishes in one call — convenience sugar alongside the existing raw-text overload.
+
+**`MessageCallback` transport-name awareness.** The first argument to `Client::onMessage` is now the transport name. Multi-transport devices (e.g. receiving the same event type over both WS and MQTT) can discriminate by source.
 
 **Per-transport receive hooks.**
 
@@ -50,7 +84,7 @@ Header files renamed to drop the `Courier` prefix: `CourierWSTransport.h` → `W
 - `WebSocketTransport::onBinary(cb)` — binary frames; `(const uint8_t* data, size_t len)`
 - `MqttTransport::onMessage(topic, payload, len)` — topic-aware
 
-These coexist with `Client::onMessage(type, doc)` (which fires only on JSON-parsing success).
+These coexist with `Client::onMessage(transportName, type, doc)` (which fires only on JSON-parsing success).
 
 **Binary frame routing fix.** WebSocket binary frames (op_code `0x02`) are now dispatched. Previously the IDF event handler filtered them out.
 

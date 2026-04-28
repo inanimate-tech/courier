@@ -23,6 +23,7 @@ Courier::Config makeConfig() {
   cfg.host = "api.example.com";
   cfg.port = 443;
   cfg.path = "/ws";
+  cfg.defaultTransport = "ws";   // enable courier.send(doc)
   return cfg;
 }
 
@@ -30,11 +31,12 @@ Courier::Client courier(makeConfig());
 
 void setup() {
   courier.onConnected([]() {
-    courier.transport<Courier::WebSocketTransport>("ws")
-        .send(R"({"type":"hello"})");
+    JsonDocument doc;
+    doc["type"] = "hello";
+    courier.send(doc);
   });
-  courier.onMessage([](const char* type, JsonDocument& doc) {
-    Serial.printf("Got: %s\n", type);
+  courier.onMessage([](const char* transportName, const char* type, JsonDocument& doc) {
+    Serial.printf("Got: %s (via %s)\n", type, transportName);
   });
   courier.setup();
 }
@@ -119,8 +121,16 @@ Quick overview:
 courier.isConnected();
 courier.getState();        // Courier::State
 
-// Sending — talk to the transport directly
-courier.transport<Courier::WebSocketTransport>("ws").send(payload);
+// Sending via Client (routes to defaultTransport)
+JsonDocument doc;
+doc["type"] = "hello";
+courier.send(doc);                          // WS default
+Courier::SendOptions opts;
+opts.topic = "sensors/me";
+courier.send(doc, opts);                    // MQTT with per-call topic
+
+// Explicit transport access — for raw frames or multi-transport setups
+courier.transport<Courier::WebSocketTransport>("ws").sendText(payload);
 courier.transport<Courier::WebSocketTransport>("ws").sendBinary(data, len);
 courier.transport<Courier::MqttTransport>("mqtt").publish("topic", payload);
 
@@ -130,7 +140,7 @@ courier.suspend();   // free SRAM for OTA
 courier.resume();
 
 // Callbacks (single-slot, last registration wins)
-courier.onMessage([](const char* type, JsonDocument& doc) { });   // JSON only
+courier.onMessage([](const char* transportName, const char* type, JsonDocument& doc) { });
 courier.onConnected([]() { });
 courier.onDisconnected([]() { });
 courier.onError([](const char* category, const char* msg) { });

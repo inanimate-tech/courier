@@ -88,37 +88,68 @@ courier.onConnectionChange([](Courier::State state) {
 
 The library remains C++17. Both styles work in any consumer.
 
-## Sending
+## JSON-first send
 
-The `send` / `sendTo` / `sendBinaryTo` / `publishTo` methods on Client are gone. Talk to transports directly.
+The primary path for sending is now `Client::send(JsonDocument&)`. Set a default transport in Config and call `courier.send(doc)` — Courier routes to the right transport.
 
 Old:
 ```cpp
 courier.send(payload);                          // default transport
 courier.sendTo("ws", payload);                  // named transport
-courier.sendBinaryTo("ws", data, len);          // binary
 courier.publishTo("mqtt", topic, payload);      // MQTT publish
 ```
 
 New:
 ```cpp
-courier.transport<Courier::WebSocketTransport>("ws").send(payload);
-courier.transport<Courier::WebSocketTransport>("ws").sendBinary(data, len);
-courier.transport<Courier::MqttTransport>("mqtt").publish(topic, payload);
+// Set the default transport in Config:
+Courier::Config cfg;
+cfg.defaultTransport = "ws";
+Courier::Client courier(cfg);
+
+// Send JSON via the default transport:
+JsonDocument doc;
+doc["type"] = "hello";
+courier.send(doc);
+
+// MQTT with per-call topic (no stored default topic):
+cfg.defaultTransport = "mqtt";
+// ...
+JsonDocument doc;
+doc["type"] = "telemetry";
+Courier::SendOptions opts;
+opts.topic = "sensors/me";
+courier.send(doc, opts);
+
+// Explicit transport routing — drop down when needed:
+courier.transport<Courier::WebSocketTransport>("ws").sendBinary(audio, len);
+courier.transport<Courier::MqttTransport>("mqtt").publish("sensors/me", payload);
 ```
 
-For frequent call sites, alias once:
-```cpp
-auto& ws()   { return courier.transport<Courier::WebSocketTransport>("ws"); }
-auto& mqtt() { return courier.transport<Courier::MqttTransport>("mqtt"); }
+`sendTo`, `sendBinaryTo`, and `publishTo` are permanently removed. For per-call explicit routing, use `transport<T>(name).send(doc)` or the transport-specific methods (`sendText`, `sendBinary`, `publish`).
 
-ws().send(payload);
-mqtt().publish(topic, payload);
+## Sending design principle
+
+`Client::send(JsonDocument&)` is the golden path — pass a doc, Courier delivers it to the configured transport. Per-call options live in `Courier::SendOptions` (topic for MQTT, ignored by WS and UDP).
+
+For raw frames or transport-specific shapes, drop down to the transport directly:
+
+```cpp
+// WS raw text:
+courier.transport<Courier::WebSocketTransport>("ws").sendText(raw);
+
+// WS binary:
+courier.transport<Courier::WebSocketTransport>("ws").sendBinary(data, len);
+
+// MQTT direct publish:
+courier.transport<Courier::MqttTransport>("mqtt").publish(topic, payload);
+
+// MQTT JSON sugar:
+courier.transport<Courier::MqttTransport>("mqtt").publish(topic, doc);
 ```
 
 ## Receiving
 
-`onRawMessage` and `onBinaryMessage` on Client are gone. Move them to per-transport hooks. `onMessage(type, doc)` is unchanged.
+`onRawMessage` and `onBinaryMessage` on Client are gone. Move them to per-transport hooks. `onMessage` callback gains `transportName` as its first argument.
 
 Old:
 ```cpp
@@ -129,8 +160,9 @@ courier.onBinaryMessage([](const uint8_t* d, size_t l) { /* binary */ });
 
 New:
 ```cpp
-courier.onMessage([](const char* type, JsonDocument& doc) {
+courier.onMessage([](const char* transportName, const char* type, JsonDocument& doc) {
     // JSON only — fires when the text payload parses as JSON.
+    // transportName tells you which transport delivered the message ("ws", "mqtt", etc.)
 });
 
 // Per-transport hooks fire alongside Client's JSON dispatch:
@@ -143,6 +175,60 @@ mqtt.onMessage([](const char* topic, const char* p, size_t l) {
     // Per-MQTT, topic-aware. Fires for every message; if the payload is
     // JSON, Client::onMessage also fires for the same payload.
 });
+```
+
+The `transportName` arg is most useful when a single device receives the same logical message type over multiple transports (e.g. WS and MQTT simultaneously):
+
+```cpp
+courier.onMessage([](const char* transportName, const char* type, JsonDocument& doc) {
+    if (strcmp(type, "config") == 0) {
+        Serial.printf("config arrived via %s\n", transportName);
+    }
+});
+```
+
+## MQTT default topic
+
+`MqttTransport::setDefaultPublishTopic()` and the stored default topic are gone. Topic now goes per-call, either via `SendOptions.topic` through `Client::send`, or spelled out directly on `mqtt.publish`.
+
+Old:
+```cpp
+mqtt.setDefaultPublishTopic("sensors/me/data");
+mqtt.send(payload);   // -> publishes to sensors/me/data
+```
+
+New:
+```cpp
+// Via Client::send:
+Courier::SendOptions opts;
+opts.topic = "sensors/me/data";
+courier.send(doc, opts);
+
+// Or direct publish:
+mqtt.publish("sensors/me/data", payload);
+
+// JSON publish sugar (new in 0.4.0):
+mqtt.publish("sensors/me/data", doc);
+```
+
+## WebSocket raw text
+
+`WebSocketTransport::send(const char*)` is renamed to `sendText(const char*)`. The new `send(JsonDocument&, opts)` takes its place as the base-virtual override.
+
+Old:
+```cpp
+ws.send(R"({"type":"hello"})");
+```
+
+New:
+```cpp
+ws.sendText(R"({"type":"hello"})");   // raw text frame
+
+// Or let Courier serialize for you:
+JsonDocument doc;
+doc["type"] = "hello";
+ws.send(doc);           // via transport directly
+courier.send(doc);      // via Client::send (if defaultTransport = "ws")
 ```
 
 ## Adding transports
@@ -162,35 +248,6 @@ auto& mqtt = courier.addTransport<Courier::MqttTransport>("mqtt", mqttCfg);
 // Client owns mqtt now. Set the endpoint by calling begin() directly when
 // the values are ready (e.g. inside onTransportsWillConnect):
 mqtt.begin(host, port, path);
-```
-
-## MQTT default topic
-
-`MqttTransport::send()` and `setDefaultPublishTopic()` are gone. Spell the topic on every publish.
-
-Old:
-```cpp
-mqtt.setDefaultPublishTopic("sensors/me/data");
-mqtt.send(payload);   // -> publishes to sensors/me/data
-```
-
-New:
-```cpp
-mqtt.publish("sensors/me/data", payload);
-```
-
-If the default-topic ergonomic was load-bearing for your app, a thin wrapper handles it cleanly:
-```cpp
-class Device {
-public:
-    bool send(const char* payload) {
-        return _courier.transport<Courier::MqttTransport>("mqtt")
-            .publish(_eventTopic, payload);
-    }
-private:
-    Courier::Client _courier;
-    String _eventTopic;
-};
 ```
 
 ## Suspend / resume
@@ -215,8 +272,29 @@ New: auto-registered as `"ws"` only when `Config::host` is non-null/non-empty; a
 
 ```cpp
 auto& ws = courier.transport<Courier::WebSocketTransport>("ws");
-ws.send(R"({"type":"hello"})");
+ws.sendText(R"({"type":"hello"})");
 ```
+
+## Custom transport authors
+
+The `Transport` base virtual changed signature. If you subclass `Transport`, update your override:
+
+Old:
+```cpp
+bool send(const char* payload) override { /* ... */ }
+```
+
+New:
+```cpp
+bool send(JsonDocument& doc, const Courier::SendOptions& options = {}) override {
+    // serialize doc yourself, then deliver
+    String payload;
+    serializeJson(doc, payload);
+    // ...
+}
+```
+
+`sendBinary` and `publish` are no longer on the base — remove those overrides unless your transport genuinely supports them as custom extensions.
 
 ## Multiple WebSocket transports
 
