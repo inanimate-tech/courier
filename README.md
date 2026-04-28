@@ -8,6 +8,8 @@ Batteries-included JSON messaging for ESP32. WiFi and user configuration, WebSoc
 > ⚠️ This is **v0.4.0-dev** and the API has changed considerably.
 >
 > To pin to the previous stable version use `lib_deps = https://github.com/inanimate-tech/courier.git#v0.3.2` in your `platformio.ini`.
+>
+> When you're ready to migrate, change your `lib_deps` to use the latest version from GitHub and point your coding agent at [docs/migration-0.3-to-0.4.md](docs/migration-0.3-to-0.4.md).
 
 Motivation: When you make something neat on your [M5Stick](https://shop.m5stack.com/products/m5stickc-plus2-esp32-mini-iot-development-kit?variant=44269818216705) you want the quickest path to messaging the back-end, and you want to carry it to places to show people and configure the Wi-Fi from your phone. Courier is how you do that.
 
