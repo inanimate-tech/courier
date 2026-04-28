@@ -16,6 +16,8 @@ dependencies:
     version: ">=3.0.0"
   espressif/esp_websocket_client:
     version: "^1.0.0"
+  bblanchon/arduinojson:
+    version: "^7.0.0"
 files:
   # compote does not read .gitignore — we must explicitly exclude build
   # artifacts and dev-only files, or they end up in the published tarball.

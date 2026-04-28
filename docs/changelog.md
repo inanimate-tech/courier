@@ -105,6 +105,14 @@ Downstream libraries that take `CourierState` (now `Courier::State`) in their pu
 
 ---
 
+## v0.3.2
+
+### Fixes
+
+- ESP-IDF: courier now installs cleanly from the registry. 0.3.1 left ezTime, ArduinoJson, and WiFiManager undeclared in `idf_component.yml`, so downstream consumers hit `unknown name` errors on `idf.py reconfigure`. No consumer-side change needed — drop any `fetch-arduino-deps.sh`-style workaround.
+
+---
+
 ## v0.3.1
 
 ### Fixes
