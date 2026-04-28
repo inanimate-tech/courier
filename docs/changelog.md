@@ -1,8 +1,73 @@
 # Changelog
 
-## v0.4.0-dev (24c703c)
+## v0.4.0-dev
 
-Theme: rationalising naming.
+Theme: rationalising naming and shrinking surface area.
+
+### Breaking changes
+
+**Namespace and casing.** All public types now live in `namespace Courier`. Acronyms become PascalCase-as-words.
+
+| Old | New |
+|---|---|
+| `Courier` (manager class) | `Courier::Client` |
+| `CourierConfig` | `Courier::Config` |
+| `CourierTransport` | `Courier::Transport` |
+| `CourierEndpoint` | `Courier::Endpoint` |
+| `CourierWSTransport` | `Courier::WebSocketTransport` |
+| `CourierMqttTransport` | `Courier::MqttTransport` |
+| `CourierUDPTransport` | `Courier::UdpTransport` |
+| `CourierSpscQueue` | `Courier::SpscQueue` |
+| `CourierWSTransportConfig` | `Courier::WebSocketTransport::Config` (nested) |
+| `CourierMqttTransportConfig` | `Courier::MqttTransport::Config` (nested) |
+
+Header files renamed to drop the `Courier` prefix: `CourierWSTransport.h` → `WebSocketTransport.h`, etc. Layout is flat under `src/`.
+
+**State enum.** `enum CourierState` (with `COURIER_BOOTING` etc.) is now `enum class Courier::State` with PascalCase values (`Booting`, `WifiConnecting`, `Connected`, `Reconnecting`, `ConnectionFailed`, etc.).
+
+**Client surface contraction.** Removed from `Courier::Client`:
+
+- `send(payload)`, `sendTo(name, payload)`, `sendBinaryTo(name, data, len)`, `publishTo(name, topic, payload)` — call methods on the transport directly via `transport<T>(name)`.
+- `setDefaultTransport(name)`, `setDefaultTopic(topic)` — no implicit routing.
+- `setEndpoint(name, endpoint)` — call `transport.begin(host, port, path)` when ready.
+- `builtinWS()` — access via `transport<WebSocketTransport>("ws")`.
+- `onRawMessage`, `onBinaryMessage` — moved to per-transport hooks.
+- `Config::defaultTransport`, `Config::defaultTopic` fields — removed.
+
+**Transport registry.** `addTransport(name, Transport*)` is now templated `addTransport<T>(name, args...)` — Client constructs and owns the transport, returns a typed reference. `getTransport(name)` is replaced by `transport<T>(name)` which returns `T&` (asserts on miss). Client owns registered transports via `std::unique_ptr`.
+
+**Lifecycle method rename.** `suspendTransports()` / `resumeTransports()` → `suspend()` / `resume()`.
+
+**MqttTransport surface.** Removed `MqttTransport::send()` and `MqttTransport::setDefaultPublishTopic()`. Every publish spells out the topic via `mqtt.publish(topic, payload[, qos, retain])`. The `send()` no-op override exists only because `Transport::send` is pure-virtual on the base.
+
+**Built-in WS now opt-in.** Previously the Client always registered a WebSocketTransport as `"ws"`. Now it only does so if `Config::host` is non-null and non-empty. Stacks that don't use the built-in WS just leave `host` null and add their transports explicitly.
+
+### New
+
+**Per-transport receive hooks.**
+
+- `WebSocketTransport::onText(cb)` — text frames; `(const char* payload, size_t len)`
+- `WebSocketTransport::onBinary(cb)` — binary frames; `(const uint8_t* data, size_t len)`
+- `MqttTransport::onMessage(topic, payload, len)` — topic-aware
+
+These coexist with `Client::onMessage(type, doc)` (which fires only on JSON-parsing success).
+
+**Binary frame routing fix.** WebSocket binary frames (op_code `0x02`) are now dispatched. Previously the IDF event handler filtered them out.
+
+**Lock-free SPSC queue (`Courier::SpscQueue<T, N>`).** Replaces the `#ifdef ESP_PLATFORM` FreeRTOS / single-slot-host FIFO in the transport base. One implementation, tested on host, identical behaviour on device.
+
+### Internal
+
+- `Transport.h` no longer includes `<freertos/FreeRTOS.h>` or `<freertos/queue.h>`.
+- The transport base gains an internal `setClientHook` slot that Client wires for JSON dispatch — separate from the user-facing message callback so both fire.
+- `Transport::drainSignals()` extracted from `drainPending()` so transport subclasses that need custom per-message dispatch (e.g. `MqttTransport` with topic-aware delivery) can override `loop()` cleanly.
+- New unit test directory `test_spsc_queue/` with primitive tests.
+- Renamed `test_courier/` → `test_client/`, `test_ws_transport/` → `test_websocket_transport/`. `test_mqtt_transport/` keeps its name; contents updated.
+- Burst-absorption regression tests on WS and MQTT transports verify the FIFO behaviour (previously untestable on host).
+
+### Lockstep coordination
+
+If you depend on Outrun, you must update Outrun in the same release cycle. `OutrunDevice::onConnectionChange(CourierState)` becomes `OutrunDevice::onConnectionChange(Courier::State)`. The Outrun project ships a paired PR; pin both versions together.
 
 ---
 

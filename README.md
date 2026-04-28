@@ -7,7 +7,7 @@ Batteries-included JSON messaging for ESP32. WiFi and user configuration, WebSoc
 
 Motivation: When you make something neat on your [M5Stick](https://shop.m5stack.com/products/m5stickc-plus2-esp32-mini-iot-development-kit?variant=44269818216705) you want the quickest path to messaging the back-end, and you want to carry it to places to show people and configure the Wi-Fi from your phone. Courier is how you do that.
 
-Courier expects JSON messages with a `"type"` field. Messages are parsed with ArduinoJson and the `type` string is passed to the `onMessage` callback alongside the parsed document. Use `onRawMessage` for non-JSON or custom framing.
+Courier expects JSON messages with a `"type"` field. Messages are parsed with ArduinoJson and the `type` string is passed to the `onMessage` callback alongside the parsed document. Use the per-transport receive hooks (`WebSocketTransport::onText`, `MqttTransport::onMessage`, etc.) for non-JSON or topic-routed payloads.
 
 ## Quick Start
 
@@ -18,18 +18,21 @@ Courier expects JSON messages with a `"type"` field. Messages are parsed with Ar
 ```cpp
 #include <Courier.h>
 
-CourierConfig makeConfig() {
-  CourierConfig cfg;
+Courier::Config makeConfig() {
+  Courier::Config cfg;
   cfg.host = "api.example.com";
   cfg.port = 443;
   cfg.path = "/ws";
   return cfg;
 }
 
-Courier courier(makeConfig());
+Courier::Client courier(makeConfig());
 
 void setup() {
-  courier.onConnected([]() { courier.send(R"({"type":"hello"})"); });
+  courier.onConnected([]() {
+    courier.transport<Courier::WebSocketTransport>("ws")
+        .send(R"({"type":"hello"})");
+  });
   courier.onMessage([](const char* type, JsonDocument& doc) {
     Serial.printf("Got: %s\n", type);
   });
@@ -49,7 +52,7 @@ void loop() { courier.loop(); }
 - **Reconnection** — exponential backoff (5s-60s), health monitoring, automatic recovery
 - **Time sync** — NTP primary (continuous drift correction) + HTTP Date header fallback
 - **JSON routing** — messages parsed and dispatched by `type` field
-- **Transport map** — named transports, broadcast or targeted sending
+- **Transport map** — named transports, per-transport hooks for direct access
 
 ## Opinionated
 
@@ -107,56 +110,60 @@ dependencies:
 
 ## API
 
-See [docs/api.md](docs/api.md) for the full API reference.
+See [docs/api.md](docs/api.md) for the full API reference. Migrating from 0.3.x? See [docs/migration-0.3-to-0.4.md](docs/migration-0.3-to-0.4.md).
 
 Quick overview:
 
 ```cpp
 // State
 courier.isConnected();
-courier.getState();        // CourierState enum
+courier.getState();        // Courier::State
 
-// Sending — "To" suffix means you specify the transport
-courier.send(payload);                              // default transport + topic
-courier.sendTo("mqtt", payload);                    // named transport
-courier.sendBinaryTo("ws", data, len);              // named transport, binary
-courier.publishTo("mqtt", "my/topic", payload);     // named transport + topic
+// Sending — talk to the transport directly
+courier.transport<Courier::WebSocketTransport>("ws").send(payload);
+courier.transport<Courier::WebSocketTransport>("ws").sendBinary(data, len);
+courier.transport<Courier::MqttTransport>("mqtt").publish("topic", payload);
 
-// Transports
-courier.addTransport("mqtt", &mqttTransport);
-courier.suspendTransports();   // free SRAM for OTA
-courier.resumeTransports();
+// Transports — Client constructs and owns
+auto& mqtt = courier.addTransport<Courier::MqttTransport>("mqtt", mqttCfg);
+courier.suspend();   // free SRAM for OTA
+courier.resume();
 
 // Callbacks (single-slot, last registration wins)
-courier.onMessage([](const char* type, JsonDocument& doc) { });
-courier.onRawMessage([](const char* payload, size_t len) { });
+courier.onMessage([](const char* type, JsonDocument& doc) { });   // JSON only
 courier.onConnected([]() { });
 courier.onDisconnected([]() { });
 courier.onError([](const char* category, const char* msg) { });
 
+// Per-transport hooks (raw / topic-aware / binary)
+auto& ws = courier.transport<Courier::WebSocketTransport>("ws");
+ws.onText  ([](const char* p, size_t l)    { });
+ws.onBinary([](const uint8_t* d, size_t l) { });
+mqtt.onMessage([](const char* topic, const char* p, size_t l) { });
+
 // Raw ESP-IDF config access
-courier.builtinWS().onConfigure([](esp_websocket_client_config_t& cfg) { });
-mqtt.onConfigure([](esp_mqtt_client_config_t& cfg) { });
+ws.onConfigure  ([](esp_websocket_client_config_t& cfg) { });
+mqtt.onConfigure([](esp_mqtt_client_config_t& cfg)      { });
 courier.onConfigureWiFi([](WiFiManager& wm) { });
 ```
 
 ## Connectivity state machine
 
 ```
-BOOTING -> WIFI_CONNECTING -> WIFI_CONNECTED -> TRANSPORTS_CONNECTING -> CONNECTED
-                                                        ^                    |
-                                                   RECONNECTING <-----------+
-                                                        |
-                                                CONNECTION_FAILED
+Booting -> WifiConnecting -> WifiConnected -> TransportsConnecting -> Connected
+                                                     ^                    |
+                                                Reconnecting <-----------+
+                                                     |
+                                             ConnectionFailed
 ```
 
 `onConnectionChange` fires at each state transition. `onError` fires alongside transitions caused by failures, providing a category and reason (e.g. `"WIFI"`, `"connection lost"`).
 
-## Limitations
+## Key design constraints
 
-- **Single instance** — WiFiManager requires a static callback, so only one Courier instance per process
+- **Single instance** — WiFiManager requires a static callback, so only one `Courier::Client` instance per process
 - **Single-slot callbacks** — each `on*` method is a setter (last registration wins). Application frameworks take the slot and expose virtual methods for subclasses
-- **Single message slot** — transport callbacks queue one pending message at a time; messages arriving before the main loop drains are dropped
+- **Bounded SPSC FIFO per transport** — small bounded queue (depth 8) absorbs bursts; sustained overload drops
 - **Arduino + ESP-IDF** — depends on Arduino framework for WiFiManager, ArduinoJson, ezTime
 
 ## License
