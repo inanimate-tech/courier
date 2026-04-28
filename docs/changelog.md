@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.4.1-dev
+
+Theme: per-transport endpoint state + manual reconnect trigger.
+
+### New
+
+- **`Transport::setEndpoint(host, port, path)`** — virtual method on the Transport base. Stores host/port/path into protected base members (`std::string` copies, so `String::c_str()` temporaries are safe). The new ergonomic for late-bound endpoints (e.g. setting an MQTT path inside `onTransportsWillConnect` after a registration roundtrip): write to the transport, the next state-machine tick reads from the transport — no clobbering.
+- **Zero-arg `Transport::begin()`** is now the pure virtual override point. Reads from stored endpoint members. The 3-arg `begin(host, port, path)` is non-virtual sugar that calls `setEndpoint(...)` then `begin()`. End-user call sites are unchanged.
+- **`Client::addTransport<T>(name, args...)` seeds endpoint** from `Config::host/port/path` immediately after construction, so the simple "host/port/path are static, set in Config" case keeps working with no manual `setEndpoint` call.
+- **`Client::reconnect()`** — manually trigger the connection-recovery state machine. Tears down transports, fires `onDisconnected`, transitions to `State::Reconnecting`. Adaptive: the handler checks WiFi and re-runs the WiFi step if needed before retrying transports. `onTransportsWillConnect` re-fires on the way back. Use for re-registration flows.
+- **`setEndpoint(const Endpoint&)`** sugar overload — revives the `Endpoint` struct as a useful value type for passing host/port/path triples.
+
+### Breaking changes (custom `Transport` subclasses only)
+
+If you subclass `Courier::Transport` directly, the override point for `begin` changed. Migrate `void begin(const char* host, uint16_t port, const char* path) override` → `void begin() override` and read host/port/path from the base members `_host` / `_port` / `_path`. End users of built-in transports (`WebSocketTransport`, `MqttTransport`, `UdpTransport`) need no changes; the 3-arg `begin(host, port, path)` overload still works as sugar.
+
+### Internal
+
+- `Client::TransportEntry::endpoint` field removed — endpoint state now lives on each transport. `handleTransportsConnectingState` calls zero-arg `transport->begin()` directly; the per-transport-vs-Config fallback computation is gone.
+
+---
+
 ## v0.4.0
 
 Theme: rationalising naming and shrinking surface area.
