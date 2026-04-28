@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.4.1-dev
+## v0.4.1
 
 Theme: per-transport endpoint state + manual reconnect trigger.
 
