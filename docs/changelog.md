@@ -101,7 +101,7 @@ These coexist with `Client::onMessage(transportName, type, doc)` (which fires on
 
 ### Lockstep coordination
 
-If you depend on Outrun, you must update Outrun in the same release cycle. `OutrunDevice::onConnectionChange(CourierState)` becomes `OutrunDevice::onConnectionChange(Courier::State)`. The Outrun project ships a paired PR; pin both versions together.
+Downstream libraries that take `CourierState` (now `Courier::State`) in their public callback signatures must be updated in the same release cycle as the Courier pin. Pin Courier and any such dependents together.
 
 ---
 
@@ -126,7 +126,7 @@ If you depend on Outrun, you must update Outrun in the same release cycle. `Outr
 
 This affects: `onMessage`, `onRawMessage`, `onConnected`, `onDisconnected`, `onConnectionChange`, `onError`, `onTransportsWillConnect`, `onTransportsDidConnect`.
 
-Application frameworks (like Outrun) should take the single slot and expose virtual methods for subclasses to override — the class hierarchy replaces the callback array.
+Application frameworks built on top of Courier should take the single slot and expose virtual methods for subclasses to override — the class hierarchy replaces the callback array.
 
 ### New features
 

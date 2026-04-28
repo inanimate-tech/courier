@@ -3,7 +3,11 @@
 Batteries-included JSON messaging for ESP32. WiFi and user configuration, WebSocket, MQTT, UDP multicast, self-healing reconnection — all handled.
 
 > [!IMPORTANT]
-> Courier is under active development so the API surface will change. See [docs/changelog.md](docs/changelog.md) for changes on each release.
+> Courier is under active development. See [docs/changelog.md](docs/changelog.md) for changes on each release.
+>
+> ⚠️ This is **v0.4.0-dev** and the API has changed considerably.
+>
+> To pin to the previous stable version use `lib_deps = https://github.com/inanimate-tech/courier.git#v0.3.2` in your `platformio.ini`.
 
 Motivation: When you make something neat on your [M5Stick](https://shop.m5stack.com/products/m5stickc-plus2-esp32-mini-iot-development-kit?variant=44269818216705) you want the quickest path to messaging the back-end, and you want to carry it to places to show people and configure the Wi-Fi from your phone. Courier is how you do that.
 
