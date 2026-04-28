@@ -21,9 +21,15 @@ public:
     std::string sentMessages[MAX_SENT];     // serialized JSON
     SendOptions lastOptions;                 // last options seen
 
-    void begin(const char* host, uint16_t port, const char* path) override {
+    void begin() override {
         _started = true;
     }
+
+    // Expose protected base members for endpoint-seeding tests.
+    const std::string& mockHost() const { return _host; }
+    const std::string& mockPath() const { return _path; }
+    uint16_t mockPort() const { return _port; }
+
     void disconnect() override {
         _connected = false;
         _started = false;
@@ -352,6 +358,54 @@ void test_client_send_with_options_passes_topic() {
     TEST_ASSERT_NOT_NULL(strstr(mt.sentMessages[0].c_str(), "telemetry"));
 }
 
+void test_addTransport_seeds_endpoint_from_config() {
+    auto& mt = courier->addTransport<MockTransport>("custom");
+    // courier was constructed in setUp with host="test.example.com", port=443, path="/ws"
+    TEST_ASSERT_EQUAL_STRING("test.example.com", mt.mockHost().c_str());
+    TEST_ASSERT_EQUAL(443, mt.mockPort());
+    TEST_ASSERT_EQUAL_STRING("/ws", mt.mockPath().c_str());
+}
+
+void test_setEndpoint_overrides_seeded_values() {
+    auto& mt = courier->addTransport<MockTransport>("custom");
+    mt.setEndpoint("override.example.com", 8443, "/custom-path");
+    TEST_ASSERT_EQUAL_STRING("override.example.com", mt.mockHost().c_str());
+    TEST_ASSERT_EQUAL(8443, mt.mockPort());
+    TEST_ASSERT_EQUAL_STRING("/custom-path", mt.mockPath().c_str());
+}
+
+void test_setEndpoint_copies_string_inputs() {
+    auto& mt = courier->addTransport<MockTransport>("custom");
+    {
+        // Simulate a String::c_str() temporary that goes out of scope.
+        std::string transient_host = "transient.example.com";
+        std::string transient_path = "/transient";
+        mt.setEndpoint(transient_host.c_str(), 1234, transient_path.c_str());
+        // transient_host and transient_path go out of scope here.
+    }
+    // The values must still be intact (proving setEndpoint copied them).
+    TEST_ASSERT_EQUAL_STRING("transient.example.com", mt.mockHost().c_str());
+    TEST_ASSERT_EQUAL(1234, mt.mockPort());
+    TEST_ASSERT_EQUAL_STRING("/transient", mt.mockPath().c_str());
+}
+
+void test_reconnect_transitions_through_reconnecting() {
+    int willConnectCount = 0;
+    courier->onTransportsWillConnect([&]() { willConnectCount++; });
+
+    advanceToConnected();
+    TEST_ASSERT_EQUAL(1, willConnectCount);  // fired once on initial connect
+
+    // Manually reconnect.
+    courier->reconnect();
+    TEST_ASSERT_TRUE(courier->getState() == State::Reconnecting);
+
+    // The state machine eventually re-runs the will-connect hook on its way
+    // back through TransportsConnecting. We don't drive it all the way back
+    // here — that's covered by the existing connection-change tests. Just
+    // verify the public method puts us in Reconnecting state.
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
 
@@ -375,6 +429,10 @@ int main(int argc, char** argv) {
     RUN_TEST(test_client_send_returns_false_when_no_default_transport);
     RUN_TEST(test_set_default_transport_overrides_config);
     RUN_TEST(test_client_send_with_options_passes_topic);
+    RUN_TEST(test_addTransport_seeds_endpoint_from_config);
+    RUN_TEST(test_setEndpoint_overrides_seeded_values);
+    RUN_TEST(test_setEndpoint_copies_string_inputs);
+    RUN_TEST(test_reconnect_transitions_through_reconnecting);
 
     return UNITY_END();
 }

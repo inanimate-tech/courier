@@ -7,10 +7,12 @@
 #include <cstring>
 #include <functional>
 #include <atomic>
+#include <string>
 
 #include <ArduinoJson.h>
 
 #include "SpscQueue.h"
+#include "Endpoint.h"
 
 namespace Courier {
 
@@ -33,7 +35,27 @@ public:
         while (_pending.pop(msg)) free(msg.payload);
     }
 
-    virtual void begin(const char* host, uint16_t port, const char* path) = 0;
+    // Pure virtual — subclasses read host/port/path from the protected base
+    // members _host / _port / _path. setEndpoint() writes those members.
+    virtual void begin() = 0;
+
+    // Sugar: setEndpoint then begin. Backwards-compatible call-site signature.
+    void begin(const char* host, uint16_t port, const char* path) {
+        setEndpoint(host, port, path);
+        begin();
+    }
+
+    // Stores the endpoint into the protected base members. Strings are copied
+    // — caller can pass a String::c_str() temporary safely.
+    virtual void setEndpoint(const char* host, uint16_t port, const char* path) {
+        _host = host ? host : "";
+        _port = port;
+        _path = path ? path : "";
+    }
+    void setEndpoint(const Endpoint& ep) {
+        setEndpoint(ep.host, ep.port, ep.path);
+    }
+
     virtual void disconnect() = 0;
     virtual void loop() { drainPending(); }
     virtual bool isConnected() const = 0;
@@ -56,6 +78,12 @@ public:
     void setClientHook(MessageCallback cb) { _clientHook = cb; }
 
 protected:
+    // Endpoint storage. Seeded by Client::addTransport<T> from Config; user
+    // can override via setEndpoint() before begin() is called.
+    std::string _host;
+    uint16_t _port = 0;
+    std::string _path;
+
     MessageCallback _onMessage;
     BinaryMessageCallback _onBinaryMessage;
     ConnectionCallback _onConnection;

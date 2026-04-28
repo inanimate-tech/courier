@@ -92,6 +92,14 @@ courier.suspend();
 courier.resume();
 ```
 
+`reconnect()` is a manual trigger for the connection-recovery state machine. It tears down all transports, fires `onDisconnected`, and transitions to `State::Reconnecting`. The state-machine handler then adapts: if WiFi is down it re-runs the WiFi connect step; if WiFi is fine it retries transports directly. `onTransportsWillConnect` re-fires on the way back through `TransportsConnecting`.
+
+```cpp
+courier.reconnect();   // re-registration / "kick the connection"
+```
+
+Use it for re-registration flows, manual reconnect triggers, or recovering from application-level state errors that warrant a fresh connect cycle.
+
 ### State
 
 ```cpp
@@ -221,12 +229,32 @@ Abstract base. Subclass this only when implementing a custom transport (see [Cus
 Pure-virtual surface:
 
 ```cpp
-virtual void begin(const char* host, uint16_t port, const char* path) = 0;
+virtual void begin() = 0;                                // zero-arg — read host/port/path from base
 virtual void disconnect() = 0;
 virtual bool isConnected() const = 0;
 virtual bool send(JsonDocument& doc, const SendOptions& options = {}) = 0;
 virtual const char* name() const = 0;
 ```
+
+Endpoint state lives on the transport itself:
+
+```cpp
+// Default impl copies the strings into protected base members
+// _host (std::string), _port (uint16_t), _path (std::string).
+virtual void setEndpoint(const char* host, uint16_t port, const char* path);
+void setEndpoint(const Courier::Endpoint& ep);   // sugar
+```
+
+`Client::addTransport<T>(name, args...)` seeds the new transport's endpoint from `Config::host/port/path` immediately on registration. Override before `begin()` runs (e.g. inside `onTransportsWillConnect`) when a transport needs a different endpoint:
+
+```cpp
+courier.onTransportsWillConnect([&]() {
+    auto& mqtt = courier.transport<Courier::MqttTransport>("mqtt");
+    mqtt.setEndpoint(brokerHost.c_str(), brokerPort, "/mqtt");
+});
+```
+
+A non-virtual 3-arg sugar overload — `void begin(const char* host, uint16_t port, const char* path)` — is provided on the base. It calls `setEndpoint(...)` then `begin()`. Existing call sites using the 3-arg form continue to work unchanged.
 
 Optional overrides (with sensible defaults):
 
@@ -235,6 +263,7 @@ Optional overrides (with sensible defaults):
 | `loop()` | `drainPending()` | Called every main-loop iteration |
 | `isPersistent()` | returns `true` | If false, excluded from failure escalation |
 | `suspend()` / `resume()` | no-ops | OTA hook |
+| `setEndpoint(host, port, path)` | copies into `_host`/`_port`/`_path` | Override only if you need custom endpoint validation |
 
 Note: `sendBinary` and `publish` are **not** on the base. `WebSocketTransport::sendBinary` is WS-specific. `MqttTransport::publish` is MQTT-specific. Custom transports are not required to implement either.
 
@@ -316,7 +345,9 @@ wsCfg.use_default_certs = true;   // use Courier's built-in GTS Root R4
 ### Methods
 
 ```cpp
-void begin(const char* host, uint16_t port, const char* path);
+// Endpoint seeding happens automatically on addTransport<T> from Config.
+// Override before begin() runs:
+void setEndpoint(const char* host, uint16_t port, const char* path);
 
 // JSON send (base virtual override) — serializes doc and calls sendText:
 bool send(JsonDocument& doc, const SendOptions& options = {});
@@ -378,7 +409,9 @@ mqttCfg.task_stack = 8192;
 ### Methods
 
 ```cpp
-void begin(const char* host, uint16_t port, const char* path);
+// Endpoint seeding happens automatically on addTransport<T> from Config.
+// Override before begin() runs:
+void setEndpoint(const char* host, uint16_t port, const char* path);
 
 // JSON send (base virtual override) — requires opts.topic; serializes and publishes:
 bool send(JsonDocument& doc, const SendOptions& options = {});
@@ -445,14 +478,14 @@ Multicast UDP, wrapping `AsyncUDP`. Available via `<UdpTransport.h>`.
 
 ```cpp
 auto& udp = courier.addTransport<Courier::UdpTransport>("udp");
-udp.begin("239.1.2.3", 5000, "");   // group, port, path (ignored)
+udp.setEndpoint("239.1.2.3", 5000, "");   // group, port, path (ignored)
 
 JsonDocument doc;
 doc["type"] = "discover";
 udp.send(doc);
 ```
 
-`begin(host, port, path)`: `host` is the multicast group address, `path` is ignored.
+`host` (via `setEndpoint`) is the multicast group address; `path` is ignored. UDP uses the endpoint set on the transport — typically a multicast group, not the same host as `Config::host` — so call `setEndpoint(...)` before `begin()` runs (e.g. inside `onTransportsWillConnect`, or before `setup()`).
 
 `send(doc, opts)` serializes the document to JSON and broadcasts it to the multicast group. `opts` fields are all ignored by the UDP transport.
 
@@ -462,13 +495,20 @@ Incoming packets are dispatched to `Client::onMessage` if they parse as JSON. Th
 
 ## `Courier::Endpoint`
 
-Internal struct holding host/port/path overrides per transport. There is no public setter in 0.4.0 — the field exists in the registry for future use. End users set per-transport endpoints by calling `transport.begin(host, port, path)` directly when the values are ready (e.g. inside `onTransportsWillConnect`); transports without an explicit `begin` call inherit `Config::host/port/path` at the `TransportsConnecting` state transition.
+Plain value type for host/port/path. Accepted by `Transport::setEndpoint(const Endpoint&)` as sugar for the 3-argument `setEndpoint(host, port, path)` form.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `host` | `const char*` | `nullptr` | Host (`nullptr` = use Config::host) |
-| `port` | `uint16_t` | `0` | Port (`0` = use Config::port) |
-| `path` | `const char*` | `nullptr` | Path (`nullptr` = use Config::path) |
+| `host` | `const char*` | `nullptr` | Host |
+| `port` | `uint16_t` | `0` | Port |
+| `path` | `const char*` | `nullptr` | Path |
+
+```cpp
+Courier::Endpoint ep{"broker.example.com", 8883, "/mqtt"};
+courier.transport<Courier::MqttTransport>("mqtt").setEndpoint(ep);
+```
+
+`setEndpoint` copies the strings into the transport — passing pointers from a temporary (e.g. `String::c_str()`) is safe.
 
 ## Custom transports
 
@@ -479,13 +519,24 @@ Subclass `Courier::Transport`. Override the pure-virtuals and any optional hooks
 
 class MyTransport : public Courier::Transport {
 public:
-    void begin(const char* host, uint16_t port, const char* path) override;
+    using Transport::begin;   // unhide the 3-arg sugar overload
+    void begin() override;    // read endpoint from _host / _port / _path
     void disconnect() override;
     bool isConnected() const override;
     bool send(JsonDocument& doc, const Courier::SendOptions& options = {}) override;
     const char* name() const override { return "MyTransport"; }
 };
+
+void MyTransport::begin() {
+    // _host, _port, _path are seeded by Client::addTransport<T> from Config,
+    // and may have been overridden by the user via setEndpoint(...).
+    connectTo(_host.c_str(), _port, _path.c_str());
+}
 ```
+
+The `using Transport::begin;` line unhides the inherited 3-arg sugar overload — without it, the derived `begin()` declaration name-hides the base's `begin(host, port, path)`.
+
+`setEndpoint(host, port, path)` is virtual but the default implementation (copy into `_host`/`_port`/`_path`) is what most subclasses want. Override only if you need custom endpoint validation or transformation.
 
 The base class provides an SPSC queue (`Courier::SpscQueue<PendingMessage, 8>`) plus drain logic. From your event handler — which may run on a different FreeRTOS task — call:
 

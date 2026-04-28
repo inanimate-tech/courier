@@ -80,17 +80,17 @@ void WebSocketTransport::destroyClient()
     _connected.store(false, std::memory_order_release);
 }
 
-void WebSocketTransport::begin(const char* host, uint16_t port, const char* path)
+void WebSocketTransport::begin()
 {
     // Tear down previous client if reconnecting
     destroyClient();
 
     // Build wss:// URI
     std::string uri = "wss://";
-    uri += host;
+    uri += _host.c_str();
     uri += ":";
-    uri += std::to_string(port);
-    uri += path;
+    uri += std::to_string(_port);
+    uri += _path.c_str();
 
     ESP_LOGI(TAG, "Connecting to %s", uri.c_str());
 

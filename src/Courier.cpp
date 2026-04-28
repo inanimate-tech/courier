@@ -198,14 +198,9 @@ void Client::handleTransportsConnectingState()
       TransportEntry& entry = _transports[i];
       if (!entry.transport || entry.transport->isConnected()) continue;
 
-      const char* host = (entry.endpoint.host && entry.endpoint.host[0])
-          ? entry.endpoint.host : _config.host;
-      uint16_t port = entry.endpoint.port == 0
-          ? _config.port : entry.endpoint.port;
-      const char* path = (entry.endpoint.path && entry.endpoint.path[0])
-          ? entry.endpoint.path : _config.path;
-
-      entry.transport->begin(host, port, path);
+      // Endpoint values were seeded by attachTransport() and may have been
+      // overridden by the user via transport.setEndpoint(...). Just begin().
+      entry.transport->begin();
     }
   }
 
@@ -485,6 +480,11 @@ void Client::attachTransport(const char* name, Transport* transport)
       _transports[i].transport.reset(transport);
       if (i >= _transportCount) _transportCount = i + 1;
 
+      // Seed endpoint from Config so the simple "static path in Config" case
+      // works without any setEndpoint call from the user. The user can still
+      // override via transport.setEndpoint(...) before begin() runs.
+      transport->setEndpoint(_config.host, _config.port, _config.path);
+
       // Wire JSON dispatch via the internal hook slot. The user-facing
       // _onMessage slot stays free for per-transport hooks (Phase 8).
       transport->setClientHook([this, name](const char* p, size_t l) {
@@ -545,7 +545,6 @@ void Client::removeTransport(const char* name)
     if (_transports[i].name && strcmp(_transports[i].name, name) == 0) {
       _transports[i].name = nullptr;
       _transports[i].transport.reset();
-      _transports[i].endpoint = Endpoint{};
       _transports[i].failed = false;
       return;
     }
@@ -568,6 +567,16 @@ void Client::resume()
       _transports[i].transport->resume();
     }
   }
+}
+
+void Client::reconnect()
+{
+  Serial.println("[courier] Manual reconnect requested");
+  teardownAllTransports();
+  fireErrorCallbacks("RECONNECT", "manual reconnect requested");
+  _reconnect.disconnectedCallbacksFired = true;
+  fireDisconnectedCallbacks();
+  transitionTo(State::Reconnecting);
 }
 
 // --- State queries ---

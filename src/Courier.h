@@ -108,6 +108,18 @@ public:
   void suspend();
   void resume();
 
+  // Manually trigger the connection-recovery state machine. Tears down
+  // transports, fires onDisconnected, transitions to State::Reconnecting.
+  // The state-machine handler then checks WiFi: if down, also disconnects
+  // and re-runs the WiFi connect step before retrying transports; if WiFi
+  // is fine, retries transports directly. onTransportsWillConnect re-fires
+  // on the way back through TransportsConnecting.
+  //
+  // Use for re-registration flows, manual "kick the connection" triggers,
+  // or recovering from application-level state errors that warrant a
+  // fresh connect cycle.
+  void reconnect();
+
   // --- Event callbacks (single-slot, last registration wins) ---
   void onMessage(MessageCallback cb);
   void onConnected(Callback cb);
@@ -136,7 +148,6 @@ private:
   struct TransportEntry {
     const char* name = nullptr;
     std::unique_ptr<Transport> transport;
-    Endpoint endpoint;
     bool failed = false;
   };
   TransportEntry _transports[MAX_TRANSPORTS];

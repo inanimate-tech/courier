@@ -136,17 +136,17 @@ bool MqttTransport::send(JsonDocument& doc, const SendOptions& options)
     return publish(options.topic, buf, options.qos, options.retain);
 }
 
-void MqttTransport::begin(const char* host, uint16_t port, const char* path)
+void MqttTransport::begin()
 {
     // Tear down previous client cleanly
     destroyClient();
 
     // Build wss:// URI
     std::string uri = "wss://";
-    uri += host;
+    uri += _host.c_str();
     uri += ":";
-    uri += std::to_string(port);
-    uri += path;
+    uri += std::to_string(_port);
+    uri += _path.c_str();
 
     ESP_LOGI(TAG, "Connecting to %s", uri.c_str());
 

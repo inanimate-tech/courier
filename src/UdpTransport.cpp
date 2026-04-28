@@ -20,15 +20,14 @@ UdpTransport::~UdpTransport() {
     leaveMulticast();
 }
 
-void UdpTransport::begin(const char* host, uint16_t port, const char* path) {
-    (void)path;
-    if (!host || !host[0]) {
+void UdpTransport::begin() {
+    if (_host.empty()) {
         ESP_LOGW(TAG, "No multicast group — skipping begin");
         return;
     }
     leaveMulticast();
-    _multicastHost = host;
-    _multicastPort = port;
+    _multicastHost = _host.c_str();
+    _multicastPort = _port;
     joinMulticast();
 }
 

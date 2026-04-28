@@ -27,7 +27,8 @@ public:
     MqttTransport(const Config& config);
     ~MqttTransport();
 
-    void begin(const char* host, uint16_t port, const char* path) override;
+    using Transport::begin;  // unhide 3-arg sugar
+    void begin() override;
     void disconnect() override;
     bool isConnected() const override;
     const char* name() const override { return "MQTT"; }

@@ -18,7 +18,8 @@ public:
     UdpTransport();
     ~UdpTransport();
 
-    void begin(const char* host, uint16_t port, const char* path) override;
+    using Transport::begin;  // unhide 3-arg sugar
+    void begin() override;
     void disconnect() override;
     bool isConnected() const override;
     bool send(JsonDocument& doc, const SendOptions& options = {}) override;
