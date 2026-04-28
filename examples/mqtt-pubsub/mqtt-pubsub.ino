@@ -6,6 +6,7 @@ Courier::Config makeConfig() {
   cfg.host = "broker.example.com";
   cfg.port = 443;
   cfg.path = "/ws";
+  cfg.defaultTransport = "mqtt";
   return cfg;
 }
 
@@ -40,8 +41,8 @@ void setup() {
     Serial.println("Connected!");
   });
 
-  courier.onMessage([](const char* type, JsonDocument& doc) {
-    Serial.printf("Message type: %s\n", type);
+  courier.onMessage([](const char* tname, const char* type, JsonDocument& doc) {
+    Serial.printf("[%s] type=%s\n", tname, type);
   });
 
   courier.setup();
@@ -50,12 +51,16 @@ void setup() {
 void loop() {
   courier.loop();
 
-  // Publish sensor data every 10 seconds
+  // Publish sensor data every 10 seconds via the default transport.
   static unsigned long lastPublish = 0;
   if (millis() - lastPublish > 10000 && courier.isConnected()) {
     lastPublish = millis();
-    courier.transport<Courier::MqttTransport>("mqtt")
-        .publish("sensors/my-device/data", R"({"type":"reading","temp":22.5})");
+    JsonDocument doc;
+    doc["type"] = "reading";
+    doc["temp"] = 22.5;
+    Courier::SendOptions opts;
+    opts.topic = "sensors/my-device/data";
+    courier.send(doc, opts);
   }
 
   // Dynamic subscription example

@@ -10,6 +10,7 @@ Courier::Config makeConfig() {
     cfg.host = "example.com";
     cfg.port = 443;
     cfg.path = "/ws";
+    cfg.defaultTransport = "ws";
     return cfg;
 }
 
@@ -27,16 +28,19 @@ extern "C" void app_main() {
     courier.addTransport<Courier::MqttTransport>("mqtt", mqttCfg);
 
     courier.onConnected([]() {
-        courier.transport<Courier::WebSocketTransport>("ws")
-            .send(R"({"type":"hello"})");
+        JsonDocument doc;
+        doc["type"] = "hello";
+        courier.send(doc);
     });
 
-    courier.onMessage([](const char* type, JsonDocument& doc) {
-        // Handle incoming messages by type
+    courier.onMessage([](const char* tname, const char* type, JsonDocument& doc) {
+        // Handle incoming messages by transport / type
+        (void)tname; (void)type; (void)doc;
     });
 
     courier.onError([](const char* category, const char* message) {
         // Handle errors
+        (void)category; (void)message;
     });
 
     courier.setup();

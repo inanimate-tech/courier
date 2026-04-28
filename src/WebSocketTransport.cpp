@@ -143,7 +143,15 @@ bool WebSocketTransport::isConnected() const
     return _connected.load(std::memory_order_acquire);
 }
 
-bool WebSocketTransport::send(const char* payload)
+bool WebSocketTransport::send(JsonDocument& doc, const SendOptions&)
+{
+    char buf[1024];
+    size_t n = serializeJson(doc, buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return false;
+    return sendText(buf);
+}
+
+bool WebSocketTransport::sendText(const char* payload)
 {
     if (!_connected.load(std::memory_order_acquire) || !_client) return false;
     int result = esp_websocket_client_send_text(_client, payload,

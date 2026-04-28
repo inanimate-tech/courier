@@ -14,6 +14,7 @@ Client* Client::_instance = nullptr;
 Client::Client(const Config& config)
     : _config(config),
       _state(State::Booting),
+      _defaultTransport(config.defaultTransport ? config.defaultTransport : ""),
       _health{},
       _reconnect{}
 {
@@ -443,7 +444,7 @@ bool Client::syncTimeFromHttpDate()
 
 // --- Transport message/connection handlers ---
 
-void Client::dispatchJSON(const char* payload, size_t length)
+void Client::dispatchJSON(const char* transportName, const char* payload, size_t length)
 {
   if (!_messageCallback) return;
   JsonDocument doc;
@@ -452,7 +453,7 @@ void Client::dispatchJSON(const char* payload, size_t length)
     return;
   }
   const char* mtype = doc["type"] | "";
-  _messageCallback(mtype, doc);
+  _messageCallback(transportName, mtype, doc);
 }
 
 void Client::handleTransportConnection(Transport* transport, bool connected)
@@ -486,8 +487,8 @@ void Client::attachTransport(const char* name, Transport* transport)
 
       // Wire JSON dispatch via the internal hook slot. The user-facing
       // _onMessage slot stays free for per-transport hooks (Phase 8).
-      transport->setClientHook([this](const char* p, size_t l) {
-        dispatchJSON(p, l);
+      transport->setClientHook([this, name](const char* p, size_t l) {
+        dispatchJSON(name, p, l);
       });
       transport->setConnectionCallback([this](Transport* t, bool c) {
         handleTransportConnection(t, c);
@@ -510,6 +511,32 @@ Transport* Client::lookupTransport(const char* name)
     }
   }
   return nullptr;
+}
+
+Transport* Client::lookupDefaultTransport()
+{
+  const char* name = _defaultTransport.length() > 0
+      ? _defaultTransport.c_str()
+      : _config.defaultTransport;
+  if (!name || !name[0]) return nullptr;
+  return lookupTransport(name);
+}
+
+bool Client::send(JsonDocument& doc)
+{
+  return send(doc, SendOptions{});
+}
+
+bool Client::send(JsonDocument& doc, const SendOptions& options)
+{
+  Transport* t = lookupDefaultTransport();
+  if (!t) return false;
+  return t->send(doc, options);
+}
+
+void Client::setDefaultTransport(const char* name)
+{
+  _defaultTransport = name ? name : "";
 }
 
 void Client::removeTransport(const char* name)

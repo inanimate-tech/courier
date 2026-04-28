@@ -30,7 +30,6 @@ public:
     void begin(const char* host, uint16_t port, const char* path) override;
     void disconnect() override;
     bool isConnected() const override;
-    bool topicRequired() const override { return true; }
     const char* name() const override { return "MQTT"; }
     void suspend() override;
     void resume() override;
@@ -43,12 +42,9 @@ public:
     // Set the MQTT client ID (must be called before begin()).
     void setClientId(const char* clientId) { _configClientId = clientId ? clientId : ""; }
 
-    // MQTT requires a topic — use publish(topic, payload) instead.
-    // This override exists only to satisfy Transport's pure-virtual send().
-    bool send(const char* payload) override {
-        (void)payload;
-        return false;
-    }
+    // MQTT requires a topic — set options.topic. Serializes the JSON
+    // document and routes through publish() with options.qos / .retain.
+    bool send(JsonDocument& doc, const SendOptions& options = {}) override;
 
     // Dynamic topic management.
     // subscribe() adds the topic to the managed list and subscribes immediately
@@ -56,11 +52,11 @@ public:
     void subscribe(const char* topic, int qos = 0);
     void unsubscribe(const char* topic);
 
-    // Publish to an explicit topic (virtual override — uses QoS 0, no retain).
-    bool publish(const char* topic, const char* payload) override;
+    // Publish a raw payload to an explicit topic with optional QoS and retain.
+    bool publish(const char* topic, const char* payload, int qos = 0, bool retain = false);
 
-    // Publish with explicit QoS and retain control.
-    bool publish(const char* topic, const char* payload, int qos, bool retain);
+    // Publish a JSON document to an explicit topic.
+    bool publish(const char* topic, JsonDocument& doc, int qos = 0, bool retain = false);
 
     // Per-MQTT topic-aware receive hook. Fires for every incoming message,
     // alongside Client::onMessage (which JSON-parses the payload only — no

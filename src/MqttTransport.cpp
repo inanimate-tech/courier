@@ -108,11 +108,6 @@ void MqttTransport::unsubscribe(const char* topic)
     }
 }
 
-bool MqttTransport::publish(const char* topic, const char* payload)
-{
-    return publish(topic, payload, 0, false);
-}
-
 bool MqttTransport::publish(const char* topic, const char* payload,
                                     int qos, bool retain)
 {
@@ -120,6 +115,24 @@ bool MqttTransport::publish(const char* topic, const char* payload,
     int result = esp_mqtt_client_publish(_client, topic, payload, 0,
                                          qos, retain ? 1 : 0);
     return result >= 0;
+}
+
+bool MqttTransport::publish(const char* topic, JsonDocument& doc,
+                            int qos, bool retain)
+{
+    char buf[1024];
+    size_t n = serializeJson(doc, buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return false;
+    return publish(topic, buf, qos, retain);
+}
+
+bool MqttTransport::send(JsonDocument& doc, const SendOptions& options)
+{
+    if (!options.topic) return false;  // MQTT requires a topic
+    char buf[1024];
+    size_t n = serializeJson(doc, buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return false;
+    return publish(options.topic, buf, options.qos, options.retain);
 }
 
 void MqttTransport::begin(const char* host, uint16_t port, const char* path)

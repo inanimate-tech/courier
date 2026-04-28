@@ -47,7 +47,7 @@ void setup()
   courier.onDisconnected([]()
                          { showStatus("Reconnecting..."); });
 
-  courier.onMessage([](const char *type, JsonDocument &doc)
+  courier.onMessage([](const char *tname, const char *type, JsonDocument &doc)
                     {
     if (strcmp(type, "message") == 0) {
       const char* text = doc["text"] | "";

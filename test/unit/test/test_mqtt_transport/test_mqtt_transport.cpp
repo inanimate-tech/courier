@@ -178,15 +178,70 @@ void test_other_device_event_delivered() {
     TEST_ASSERT_EQUAL(1, deliveredMessageCount);
 }
 
-void test_send_always_returns_false() {
-    // send() is a no-op: MQTT requires an explicit topic via publish().
+void test_send_requires_topic() {
+    // send() returns false unless options.topic is set.
     mqtt = createWithTopics();
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
     client->simulateConnect();
     mqtt->loop();
-    bool result = mqtt->send("{\"type\":\"test\"}");
+
+    JsonDocument doc;
+    doc["type"] = "test";
+
+    bool result = mqtt->send(doc);  // no topic
     TEST_ASSERT_FALSE(result);
+    TEST_ASSERT_EQUAL(0, client->publishCount);
+}
+
+void test_send_with_topic_publishes() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+    mqtt->loop();
+
+    JsonDocument doc;
+    doc["msg"] = "telemetry";
+    SendOptions opts;
+    opts.topic = "sensors/me";
+    opts.qos = 1;
+    opts.retain = true;
+    bool result = mqtt->send(doc, opts);
+    TEST_ASSERT_TRUE(result);
+    TEST_ASSERT_EQUAL(1, client->publishCount);
+    TEST_ASSERT_EQUAL_STRING("sensors/me", client->lastPublishTopic.c_str());
+    TEST_ASSERT_NOT_NULL(strstr(client->lastPublishPayload.c_str(), "telemetry"));
+}
+
+void test_publish_json_overload_serializes() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+    mqtt->loop();
+
+    JsonDocument doc;
+    doc["temp"] = 22.5;
+    bool result = mqtt->publish("sensors/temp", doc);
+    TEST_ASSERT_TRUE(result);
+    TEST_ASSERT_EQUAL(1, client->publishCount);
+    TEST_ASSERT_EQUAL_STRING("sensors/temp", client->lastPublishTopic.c_str());
+    TEST_ASSERT_NOT_NULL(strstr(client->lastPublishPayload.c_str(), "22.5"));
+}
+
+void test_publish_raw_payload() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+    mqtt->loop();
+
+    bool result = mqtt->publish("foo/bar", "hello", 0, false);
+    TEST_ASSERT_TRUE(result);
+    TEST_ASSERT_EQUAL(1, client->publishCount);
+    TEST_ASSERT_EQUAL_STRING("foo/bar", client->lastPublishTopic.c_str());
+    TEST_ASSERT_EQUAL_STRING("hello", client->lastPublishPayload.c_str());
 }
 
 void test_disconnect_sets_not_connected() {
@@ -491,7 +546,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_status_message_delivered);
     RUN_TEST(test_own_event_topic_message_delivered);
     RUN_TEST(test_other_device_event_delivered);
-    RUN_TEST(test_send_always_returns_false);
+    RUN_TEST(test_send_requires_topic);
+    RUN_TEST(test_send_with_topic_publishes);
+    RUN_TEST(test_publish_json_overload_serializes);
+    RUN_TEST(test_publish_raw_payload);
     RUN_TEST(test_disconnect_sets_not_connected);
     RUN_TEST(test_reconnect_after_disconnect);
     RUN_TEST(test_reconnect_with_new_path);

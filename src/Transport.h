@@ -8,9 +8,19 @@
 #include <functional>
 #include <atomic>
 
+#include <ArduinoJson.h>
+
 #include "SpscQueue.h"
 
 namespace Courier {
+
+// Per-call options for transport-specific send parameters. Most fields
+// are no-ops on transports that don't use them.
+struct SendOptions {
+    const char* topic = nullptr;   // required for MqttTransport::send; ignored for WS/UDP
+    int qos = 0;                    // MQTT QoS (0/1/2)
+    bool retain = false;            // MQTT retain flag
+};
 
 class Transport {
 public:
@@ -27,13 +37,8 @@ public:
     virtual void disconnect() = 0;
     virtual void loop() { drainPending(); }
     virtual bool isConnected() const = 0;
-    virtual bool send(const char* payload) = 0;
+    virtual bool send(JsonDocument& doc, const SendOptions& options = {}) = 0;
     virtual bool sendBinary(const uint8_t* data, size_t len) { (void)data; (void)len; return false; }
-    virtual bool publish(const char* topic, const char* payload) {
-        (void)topic;
-        return send(payload);
-    }
-    virtual bool topicRequired() const { return false; }
     virtual const char* name() const = 0;
 
     virtual void suspend() {}

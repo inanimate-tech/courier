@@ -131,21 +131,36 @@ void test_connection_callback_on_disconnect() {
     TEST_ASSERT_FALSE(lastConnectionState);
 }
 
-void test_send_when_connected() {
+void test_send_text_when_connected() {
     ws->begin("host", 443, "/path");
     auto* client = MockWebSocketClient::lastInstance();
     client->simulateConnect();
     ws->loop();
-    bool result = ws->send("{\"type\":\"test\"}");
+    bool result = ws->sendText("{\"type\":\"test\"}");
     TEST_ASSERT_TRUE(result);
     TEST_ASSERT_EQUAL(1, client->sendCount);
     TEST_ASSERT_EQUAL_STRING("{\"type\":\"test\"}", client->sentMessages[0].c_str());
 }
 
-void test_send_fails_when_disconnected() {
+void test_send_text_fails_when_disconnected() {
     ws->begin("host", 443, "/path");
-    bool result = ws->send("{\"type\":\"test\"}");
+    bool result = ws->sendText("{\"type\":\"test\"}");
     TEST_ASSERT_FALSE(result);
+}
+
+void test_send_json_serializes_and_calls_send_text() {
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    client->simulateConnect();
+    ws->loop();
+    JsonDocument doc;
+    doc["type"] = "hello";
+    doc["value"] = 42;
+    bool result = ws->send(doc);
+    TEST_ASSERT_TRUE(result);
+    TEST_ASSERT_EQUAL(1, client->sendCount);
+    TEST_ASSERT_NOT_NULL(strstr(client->sentMessages[0].c_str(), "\"type\":\"hello\""));
+    TEST_ASSERT_NOT_NULL(strstr(client->sentMessages[0].c_str(), "\"value\":42"));
 }
 
 void test_disconnect_sets_not_connected() {
@@ -328,8 +343,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_message_delivered_to_callback);
     RUN_TEST(test_connection_callback_on_connect);
     RUN_TEST(test_connection_callback_on_disconnect);
-    RUN_TEST(test_send_when_connected);
-    RUN_TEST(test_send_fails_when_disconnected);
+    RUN_TEST(test_send_text_when_connected);
+    RUN_TEST(test_send_text_fails_when_disconnected);
+    RUN_TEST(test_send_json_serializes_and_calls_send_text);
     RUN_TEST(test_disconnect_sets_not_connected);
     RUN_TEST(test_reconnect_creates_new_client);
     RUN_TEST(test_config_cert_pem_passed_to_client);

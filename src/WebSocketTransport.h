@@ -36,7 +36,8 @@ public:
     void begin(const char* host, uint16_t port, const char* path) override;
     void disconnect() override;
     bool isConnected() const override;
-    bool send(const char* payload) override;
+    bool send(JsonDocument& doc, const SendOptions& options = {}) override;
+    bool sendText(const char* payload);
     bool sendBinary(const uint8_t* data, size_t len) override;
     const char* name() const override { return "WebSocket"; }
     void suspend() override;

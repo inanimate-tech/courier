@@ -70,11 +70,14 @@ bool UdpTransport::isConnected() const {
     return _joined.load(std::memory_order_acquire);
 }
 
-bool UdpTransport::send(const char* payload) {
+bool UdpTransport::send(JsonDocument& doc, const SendOptions&) {
     if (!_joined.load(std::memory_order_acquire)) return false;
+    char buf[1024];
+    size_t n = serializeJson(doc, buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return false;
     IPAddress group;
     group.fromString(_multicastHost.c_str());
-    _udp.writeTo((const uint8_t*)payload, strlen(payload), group, _multicastPort);
+    _udp.writeTo((const uint8_t*)buf, n, group, _multicastPort);
     return true;
 }
 

@@ -5,6 +5,7 @@ Courier::Config makeConfig() {
   cfg.host = "echo.websocket.org";
   cfg.port = 443;
   cfg.path = "/";
+  cfg.defaultTransport = "ws";
   return cfg;
 }
 
@@ -15,16 +16,18 @@ void setup() {
 
   courier.onConnected([]() {
     Serial.println("Connected!");
-    courier.transport<Courier::WebSocketTransport>("ws")
-        .send(R"({"type":"hello","msg":"world"})");
+    JsonDocument doc;
+    doc["type"] = "hello";
+    doc["msg"] = "world";
+    courier.send(doc);
   });
 
   courier.onDisconnected([]() {
     Serial.println("Disconnected — will auto-reconnect...");
   });
 
-  courier.onMessage([](const char* type, JsonDocument& doc) {
-    Serial.printf("Message type: %s\n", type);
+  courier.onMessage([](const char* tname, const char* type, JsonDocument& doc) {
+    Serial.printf("[%s] type=%s\n", tname, type);
   });
 
   courier.onError([](const char* category, const char* message) {

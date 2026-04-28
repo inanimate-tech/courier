@@ -21,7 +21,7 @@ public:
     void begin(const char* host, uint16_t port, const char* path) override;
     void disconnect() override;
     bool isConnected() const override;
-    bool send(const char* payload) override;
+    bool send(JsonDocument& doc, const SendOptions& options = {}) override;
     const char* name() const override { return "UDP"; }
 
     bool isPersistent() const override { return false; }

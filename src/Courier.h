@@ -30,6 +30,7 @@ struct Config {
   uint16_t port;
   const char* path;
   const char* apName;
+  const char* defaultTransport;  // e.g. "ws", "mqtt"; null disables Client::send
   uint32_t dns1;
   uint32_t dns2;
 
@@ -37,10 +38,11 @@ struct Config {
          uint16_t port = 443,
          const char* path = "/",
          const char* apName = nullptr,
+         const char* defaultTransport = nullptr,
          uint32_t dns1 = 0,
          uint32_t dns2 = 0)
       : host(host), port(port), path(path), apName(apName),
-        dns1(dns1), dns2(dns2) {}
+        defaultTransport(defaultTransport), dns1(dns1), dns2(dns2) {}
 };
 
 // NOTE: Only one Client instance is supported per process. WiFiManager
@@ -51,7 +53,9 @@ class Client {
 public:
   // Callback types
   using Callback = std::function<void()>;
-  using MessageCallback = std::function<void(const char* type, JsonDocument& doc)>;
+  using MessageCallback = std::function<void(const char* transportName,
+                                              const char* type,
+                                              JsonDocument& doc)>;
   using ConnectionChangeCallback = std::function<void(State state)>;
   using ErrorCallback = std::function<void(const char* category, const char* message)>;
 
@@ -90,6 +94,15 @@ public:
   }
 
   void removeTransport(const char* name);
+
+  // --- Send (routes via defaultTransport) ---
+  // Returns false if no default transport is configured / registered, or
+  // if the underlying transport's send() returns false.
+  bool send(JsonDocument& doc);
+  bool send(JsonDocument& doc, const SendOptions& options);
+
+  // Override the default transport at runtime. Pass nullptr or "" to clear.
+  void setDefaultTransport(const char* name);
 
   // --- Transport lifecycle ---
   void suspend();
@@ -132,6 +145,11 @@ private:
   // Internal registry helpers
   void attachTransport(const char* name, Transport* t);   // takes ownership
   Transport* lookupTransport(const char* name);
+  Transport* lookupDefaultTransport();
+
+  // Default-transport routing for Client::send. Empty string means
+  // "fall through to _config.defaultTransport".
+  String _defaultTransport;
 
   // WiFi
   WiFiManager _wm;
@@ -157,7 +175,7 @@ private:
   bool _timeSyncAttempted = false;
 
   // JSON dispatch — wired via Transport::setClientHook in attachTransport.
-  void dispatchJSON(const char* payload, size_t length);
+  void dispatchJSON(const char* transportName, const char* payload, size_t length);
   void handleTransportConnection(Transport* transport, bool connected);
 
   // Health monitoring
