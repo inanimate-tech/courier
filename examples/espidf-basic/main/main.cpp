@@ -3,18 +3,18 @@
 
 #include <Arduino.h>
 #include <Courier.h>
-#include <CourierMqttTransport.h>
+#include <MqttTransport.h>
 
-CourierConfig makeConfig() {
-    CourierConfig cfg;
+Courier::Config makeConfig() {
+    Courier::Config cfg;
     cfg.host = "example.com";
     cfg.port = 443;
     cfg.path = "/ws";
+    cfg.defaultTransport = "ws";
     return cfg;
 }
 
-Courier courier(makeConfig());
-CourierMqttTransport mqtt;
+Courier::Client courier(makeConfig());
 
 extern "C" void app_main() {
     // Bring up the Arduino runtime (Wi-Fi stack, timers, etc.) that courier
@@ -22,23 +22,27 @@ extern "C" void app_main() {
     // example uses app_main() directly instead of Arduino's setup()/loop().
     initArduino();
 
-    mqtt.subscribe("devices/my-device/command");
-    mqtt.setDefaultPublishTopic("devices/my-device/event");
-    mqtt.setClientId("my-device-001");
+    Courier::MqttTransport::Config mqttCfg;
+    mqttCfg.topics = {"devices/my-device/command"};
+    mqttCfg.clientId = "my-device-001";
+    courier.addTransport<Courier::MqttTransport>("mqtt", mqttCfg);
 
     courier.onConnected([]() {
-        courier.send(R"({"type":"hello"})");
+        JsonDocument doc;
+        doc["type"] = "hello";
+        courier.send(doc);
     });
 
-    courier.onMessage([](const char* type, JsonDocument& doc) {
-        // Handle incoming messages by type
+    courier.onMessage([](const char* tname, const char* type, JsonDocument& doc) {
+        // Handle incoming messages by transport / type
+        (void)tname; (void)type; (void)doc;
     });
 
     courier.onError([](const char* category, const char* message) {
         // Handle errors
+        (void)category; (void)message;
     });
 
-    courier.addTransport("mqtt", &mqtt);
     courier.setup();
 
     while (true) {

@@ -1,4 +1,4 @@
-#include "CourierUDPTransport.h"
+#include "UdpTransport.h"
 #include <cstring>
 
 #ifdef ESP_PLATFORM
@@ -12,13 +12,15 @@ static const char* TAG = "UDPTransport";
 static const char* TAG = "UDPTransport";
 #endif
 
-CourierUDPTransport::CourierUDPTransport() {}
+namespace Courier {
 
-CourierUDPTransport::~CourierUDPTransport() {
+UdpTransport::UdpTransport() {}
+
+UdpTransport::~UdpTransport() {
     leaveMulticast();
 }
 
-void CourierUDPTransport::begin(const char* host, uint16_t port, const char* path) {
+void UdpTransport::begin(const char* host, uint16_t port, const char* path) {
     (void)path;
     if (!host || !host[0]) {
         ESP_LOGW(TAG, "No multicast group — skipping begin");
@@ -30,7 +32,7 @@ void CourierUDPTransport::begin(const char* host, uint16_t port, const char* pat
     joinMulticast();
 }
 
-void CourierUDPTransport::joinMulticast() {
+void UdpTransport::joinMulticast() {
     if (_joined.load(std::memory_order_acquire)) return;
 
     IPAddress group;
@@ -52,7 +54,7 @@ void CourierUDPTransport::joinMulticast() {
     }
 }
 
-void CourierUDPTransport::leaveMulticast() {
+void UdpTransport::leaveMulticast() {
     if (!_joined.load(std::memory_order_acquire)) return;
     _udp.close();
     _joined.store(false, std::memory_order_release);
@@ -60,18 +62,23 @@ void CourierUDPTransport::leaveMulticast() {
     ESP_LOGI(TAG, "Left multicast group");
 }
 
-void CourierUDPTransport::disconnect() {
+void UdpTransport::disconnect() {
     leaveMulticast();
 }
 
-bool CourierUDPTransport::isConnected() const {
+bool UdpTransport::isConnected() const {
     return _joined.load(std::memory_order_acquire);
 }
 
-bool CourierUDPTransport::send(const char* payload) {
+bool UdpTransport::send(JsonDocument& doc, const SendOptions&) {
     if (!_joined.load(std::memory_order_acquire)) return false;
+    char buf[1024];
+    size_t n = serializeJson(doc, buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return false;
     IPAddress group;
     group.fromString(_multicastHost.c_str());
-    _udp.writeTo((const uint8_t*)payload, strlen(payload), group, _multicastPort);
+    _udp.writeTo((const uint8_t*)buf, n, group, _multicastPort);
     return true;
 }
+
+}  // namespace Courier

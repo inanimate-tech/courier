@@ -1,5 +1,110 @@
 # Changelog
 
+## v0.4.0-dev
+
+Theme: rationalising naming and shrinking surface area.
+
+### Breaking changes
+
+**Namespace and casing.** All public types now live in `namespace Courier`. Acronyms become PascalCase-as-words.
+
+| Old | New |
+|---|---|
+| `Courier` (manager class) | `Courier::Client` |
+| `CourierConfig` | `Courier::Config` |
+| `CourierTransport` | `Courier::Transport` |
+| `CourierEndpoint` | `Courier::Endpoint` |
+| `CourierWSTransport` | `Courier::WebSocketTransport` |
+| `CourierMqttTransport` | `Courier::MqttTransport` |
+| `CourierUDPTransport` | `Courier::UdpTransport` |
+| `CourierSpscQueue` | `Courier::SpscQueue` |
+| `CourierWSTransportConfig` | `Courier::WebSocketTransport::Config` (nested) |
+| `CourierMqttTransportConfig` | `Courier::MqttTransport::Config` (nested) |
+
+Header files renamed to drop the `Courier` prefix: `CourierWSTransport.h` → `WebSocketTransport.h`, etc. Layout is flat under `src/`.
+
+**State enum.** `enum CourierState` (with `COURIER_BOOTING` etc.) is now `enum class Courier::State` with PascalCase values (`Booting`, `WifiConnecting`, `Connected`, `Reconnecting`, `ConnectionFailed`, etc.).
+
+**Client surface changes.** Permanently removed from `Courier::Client`:
+
+- `sendTo(name, payload)`, `sendBinaryTo(name, data, len)`, `publishTo(name, topic, payload)` — use `transport<T>(name).send(doc)` or transport-specific methods.
+- `setDefaultTopic(topic)` — topic is now per-call via `SendOptions.topic`.
+- `setEndpoint(name, endpoint)` — call `transport.begin(host, port, path)` when ready.
+- `builtinWS()` — access via `transport<WebSocketTransport>("ws")`.
+- `onRawMessage`, `onBinaryMessage` — moved to per-transport hooks.
+- `Config::defaultTopic` field — removed; topic is per-call.
+
+Returned / reshaped on `Courier::Client`:
+
+- `Client::send(JsonDocument&)` and `Client::send(JsonDocument&, const SendOptions&)` — JSON-first send, routes via `Config::defaultTransport`.
+- `setDefaultTransport(name)` — runtime override for the default transport.
+- `Config::defaultTransport` field — returned (was removed in an earlier pass).
+
+**`MessageCallback` signature change.** Gains `transportName` as the first argument:
+
+Old: `void(const char* type, JsonDocument& doc)`  
+New: `void(const char* transportName, const char* type, JsonDocument& doc)`
+
+Update every `onMessage` registration.
+
+**`Transport::send` base virtual changed signature.** Custom transport subclasses must update:
+
+Old: `bool send(const char* payload) = 0`  
+New: `bool send(JsonDocument& doc, const SendOptions& options = {}) = 0`
+
+**Surfaces removed from `Transport` base.** No longer present on the abstract base (subclass-specific only):
+
+- `sendBinary(data, len)` — `WebSocketTransport`-specific; not on base.
+- `publish(topic, payload)` — `MqttTransport`-specific; not on base.
+- `topicRequired()` — no longer needed.
+
+**`WebSocketTransport::send(const char*)` renamed.** Raw text frame delivery is now `sendText(const char*)`. `send(JsonDocument&, opts)` takes the name `send` as the base-virtual override (serializes and calls `sendText`).
+
+**Transport registry.** `addTransport(name, Transport*)` is now templated `addTransport<T>(name, args...)` — Client constructs and owns the transport, returns a typed reference. `getTransport(name)` is replaced by `transport<T>(name)` which returns `T&` (asserts on miss). Client owns registered transports via `std::unique_ptr`.
+
+**Lifecycle method rename.** `suspendTransports()` / `resumeTransports()` → `suspend()` / `resume()`.
+
+**MqttTransport surface.** Removed `MqttTransport::setDefaultPublishTopic()`. Topic is now per-call: pass `opts.topic` through `Client::send(doc, opts)`, or spell it directly on `mqtt.publish(topic, ...)`.
+
+**Built-in WS now opt-in.** Previously the Client always registered a WebSocketTransport as `"ws"`. Now it only does so if `Config::host` is non-null and non-empty. Stacks that don't use the built-in WS just leave `host` null and add their transports explicitly.
+
+### New
+
+**JSON-first send sugar.** `Client::send(JsonDocument&)` and `Client::send(JsonDocument&, const SendOptions&)` route to the transport named by `Config::defaultTransport` (or the runtime override set by `setDefaultTransport`). WS users call `courier.send(doc)`. MQTT users pass `opts.topic` per call.
+
+**`Courier::SendOptions` struct.** `{const char* topic; int qos; bool retain;}` — per-call options for `send`. Defined in `<Transport.h>`. `topic` is required for MQTT; `qos` and `retain` are MQTT-only; all fields are ignored by WS and UDP.
+
+**`MqttTransport::publish` JSON overload.** `publish(topic, JsonDocument&, qos, retain)` serializes and publishes in one call — convenience sugar alongside the existing raw-text overload.
+
+**`MessageCallback` transport-name awareness.** The first argument to `Client::onMessage` is now the transport name. Multi-transport devices (e.g. receiving the same event type over both WS and MQTT) can discriminate by source.
+
+**Per-transport receive hooks.**
+
+- `WebSocketTransport::onText(cb)` — text frames; `(const char* payload, size_t len)`
+- `WebSocketTransport::onBinary(cb)` — binary frames; `(const uint8_t* data, size_t len)`
+- `MqttTransport::onMessage(topic, payload, len)` — topic-aware
+
+These coexist with `Client::onMessage(transportName, type, doc)` (which fires only on JSON-parsing success).
+
+**Binary frame routing fix.** WebSocket binary frames (op_code `0x02`) are now dispatched. Previously the IDF event handler filtered them out.
+
+**Lock-free SPSC queue (`Courier::SpscQueue<T, N>`).** Replaces the `#ifdef ESP_PLATFORM` FreeRTOS / single-slot-host FIFO in the transport base. One implementation, tested on host, identical behaviour on device.
+
+### Internal
+
+- `Transport.h` no longer includes `<freertos/FreeRTOS.h>` or `<freertos/queue.h>`.
+- The transport base gains an internal `setClientHook` slot that Client wires for JSON dispatch — separate from the user-facing message callback so both fire.
+- `Transport::drainSignals()` extracted from `drainPending()` so transport subclasses that need custom per-message dispatch (e.g. `MqttTransport` with topic-aware delivery) can override `loop()` cleanly.
+- New unit test directory `test_spsc_queue/` with primitive tests.
+- Renamed `test_courier/` → `test_client/`, `test_ws_transport/` → `test_websocket_transport/`. `test_mqtt_transport/` keeps its name; contents updated.
+- Burst-absorption regression tests on WS and MQTT transports verify the FIFO behaviour (previously untestable on host).
+
+### Lockstep coordination
+
+Downstream libraries that take `CourierState` (now `Courier::State`) in their public callback signatures must be updated in the same release cycle as the Courier pin. Pin Courier and any such dependents together.
+
+---
+
 ## v0.3.2
 
 ### Fixes
@@ -29,7 +134,7 @@
 
 This affects: `onMessage`, `onRawMessage`, `onConnected`, `onDisconnected`, `onConnectionChange`, `onError`, `onTransportsWillConnect`, `onTransportsDidConnect`.
 
-Application frameworks (like Outrun) should take the single slot and expose virtual methods for subclasses to override — the class hierarchy replaces the callback array.
+Application frameworks built on top of Courier should take the single slot and expose virtual methods for subclasses to override — the class hierarchy replaces the callback array.
 
 ### New features
 
@@ -146,3 +251,30 @@ Same reason as above.
 ## v0.1.0
 
 First public release.
+
+---
+
+## Usage (for agents)
+
+### Consuming Courier
+
+Courier is a foundational library that other projects depend on. If you are an agent working in a downstream project that depends on Courier:
+
+1. Check the version of Courier your project currently uses (look at the dependency pin in your project's `platformio.ini` / `idf_component.yml`, or the vendored copy's `library.json` / `idf_component.yml`).
+2. Check the latest version of Courier in this changelog.
+3. Read every section between those two versions and update your project's code accordingly — paying particular attention to **Breaking changes**.
+
+### Updating this changelog
+
+Each in-progress version section is headed `## vX.Y.Z-dev (<git-hash>)`, where `<git-hash>` is the short hash of the commit that introduced the section (or the most recent commit it covers, if updated in place). Released versions drop the `-dev` suffix and the git hash.
+
+Standard subsections, in order, omitting any that are empty:
+
+- **Breaking changes** — API changes that require downstream code updates.
+- **New features** — additions that are backward-compatible.
+- **Fixes** — bug fixes.
+- **Internal** — refactors, tooling, tests, docs — anything not visible to consumers.
+
+A `-dev` version section is a work-in-progress: continue appending to it as work lands. When a semver version is released (the `-dev` suffix is removed and the version is published to the PlatformIO Registry and ESP Component Registry), that section is frozen — do not modify it. New work then opens a fresh `## vX.Y.Z-dev (<git-hash>)` section above it.
+
+The `version` field in `library.json` and `idf_component.yml` tracks the in-progress `-dev` version while work is underway, and is updated to the released semver string at publish time (see `docs/publishing.md`).

@@ -1,9 +1,9 @@
 #include <M5Unified.h>
 #include <Courier.h>
 
-CourierConfig makeConfig()
+Courier::Config makeConfig()
 {
-  CourierConfig cfg;
+  Courier::Config cfg;
   cfg.host = "m5stick-demo.genmon.workers.dev";
   cfg.port = 443;
   cfg.path = "/agents/device-agent/m5stick-demo";
@@ -11,7 +11,7 @@ CourierConfig makeConfig()
   return cfg;
 }
 
-Courier courier(makeConfig());
+Courier::Client courier(makeConfig());
 
 static void showStatus(const char *text)
 {
@@ -47,7 +47,7 @@ void setup()
   courier.onDisconnected([]()
                          { showStatus("Reconnecting..."); });
 
-  courier.onMessage([](const char *type, JsonDocument &doc)
+  courier.onMessage([](const char *tname, const char *type, JsonDocument &doc)
                     {
     if (strcmp(type, "message") == 0) {
       const char* text = doc["text"] | "";

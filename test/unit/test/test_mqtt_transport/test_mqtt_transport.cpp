@@ -1,8 +1,10 @@
 #include <unity.h>
-#include <CourierMqttTransport.h>
+#include <MqttTransport.h>
 #include <mqtt_client.h>
 #include <cstring>
 #include <string>
+
+using namespace Courier;
 
 static int deliveredMessageCount = 0;
 static constexpr size_t DELIVERED_BUF_SIZE = 12288;
@@ -20,12 +22,12 @@ static void onMessageCallback(const char* payload, size_t length) {
 static int connectionEventCount = 0;
 static bool lastConnectionState = false;
 
-static void onConnectionCallback(CourierTransport* transport, bool connected) {
+static void onConnectionCallback(Transport* transport, bool connected) {
     connectionEventCount++;
     lastConnectionState = connected;
 }
 
-static CourierMqttTransport* mqtt = nullptr;
+static MqttTransport* mqtt = nullptr;
 
 void setUp(void) {
     MockMqttClient::resetInstanceCount();
@@ -41,7 +43,7 @@ void tearDown(void) {
     mqtt = nullptr;
 }
 
-static CourierMqttTransport* createWithTopics(const char* deviceId = "dev123",
+static MqttTransport* createWithTopics(const char* deviceId = "dev123",
                                                 const char* deviceType = "sensor")
 {
     std::string commandTopic = std::string("devices/") + deviceId + "/command";
@@ -49,20 +51,19 @@ static CourierMqttTransport* createWithTopics(const char* deviceId = "dev123",
     std::string eventTopic   = std::string("devices/") + deviceId + "/event";
     std::string allEvents    = "devices/+/event";
 
-    CourierMqttTransportConfig cfg;
+    MqttTransport::Config cfg;
     cfg.topics = {commandTopic, statusTopic, allEvents};
-    cfg.defaultPublishTopic = eventTopic.c_str();
     std::string clientId = std::string(deviceType) + "-" + deviceId;
     cfg.clientId = clientId.c_str();
 
-    auto* t = new CourierMqttTransport(cfg);
+    auto* t = new MqttTransport(cfg);
     t->setMessageCallback(onMessageCallback);
     t->setConnectionCallback(onConnectionCallback);
     return t;
 }
 
 void test_name_is_mqtt() {
-    mqtt = new CourierMqttTransport();
+    mqtt = new MqttTransport();
     TEST_ASSERT_EQUAL_STRING("MQTT", mqtt->name());
 }
 
@@ -82,7 +83,7 @@ void test_begin_sets_client_id() {
 }
 
 void test_begin_without_client_id_uses_empty() {
-    mqtt = new CourierMqttTransport();
+    mqtt = new MqttTransport();
     mqtt->setMessageCallback(onMessageCallback);
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
@@ -177,34 +178,103 @@ void test_other_device_event_delivered() {
     TEST_ASSERT_EQUAL(1, deliveredMessageCount);
 }
 
-void test_send_publishes_to_default_publish_topic() {
+void test_send_requires_topic() {
+    // send() returns false unless options.topic is set.
     mqtt = createWithTopics();
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
     client->simulateConnect();
     mqtt->loop();
-    bool result = mqtt->send("{\"type\":\"app_event\"}");
+
+    JsonDocument doc;
+    doc["type"] = "test";
+
+    bool result = mqtt->send(doc);  // no topic
+    TEST_ASSERT_FALSE(result);
+    TEST_ASSERT_EQUAL(0, client->publishCount);
+}
+
+void test_send_with_topic_publishes() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+    mqtt->loop();
+
+    JsonDocument doc;
+    doc["msg"] = "telemetry";
+    SendOptions opts;
+    opts.topic = "sensors/me";
+    opts.qos = 1;
+    opts.retain = true;
+    bool result = mqtt->send(doc, opts);
     TEST_ASSERT_TRUE(result);
-    TEST_ASSERT_EQUAL_STRING("devices/dev123/event", client->lastPublishTopic.c_str());
-    TEST_ASSERT_EQUAL_STRING("{\"type\":\"app_event\"}", client->lastPublishPayload.c_str());
+    TEST_ASSERT_EQUAL(1, client->publishCount);
+    TEST_ASSERT_EQUAL_STRING("sensors/me", client->lastPublishTopic.c_str());
+    TEST_ASSERT_NOT_NULL(strstr(client->lastPublishPayload.c_str(), "telemetry"));
 }
 
-void test_send_fails_when_disconnected() {
+void test_publish_json_overload_serializes() {
     mqtt = createWithTopics();
-    mqtt->begin("host", 443, "/path");
-    bool result = mqtt->send("{\"type\":\"test\"}");
-    TEST_ASSERT_FALSE(result);
-}
-
-void test_send_fails_without_publish_topic() {
-    mqtt = new CourierMqttTransport();
-    mqtt->setMessageCallback(onMessageCallback);
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
     client->simulateConnect();
     mqtt->loop();
-    bool result = mqtt->send("{\"type\":\"test\"}");
-    TEST_ASSERT_FALSE(result);
+
+    JsonDocument doc;
+    doc["temp"] = 22.5;
+    bool result = mqtt->publish("sensors/temp", doc);
+    TEST_ASSERT_TRUE(result);
+    TEST_ASSERT_EQUAL(1, client->publishCount);
+    TEST_ASSERT_EQUAL_STRING("sensors/temp", client->lastPublishTopic.c_str());
+    TEST_ASSERT_NOT_NULL(strstr(client->lastPublishPayload.c_str(), "22.5"));
+}
+
+void test_publish_raw_payload() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+    mqtt->loop();
+
+    bool result = mqtt->publish("foo/bar", "hello", 0, false);
+    TEST_ASSERT_TRUE(result);
+    TEST_ASSERT_EQUAL(1, client->publishCount);
+    TEST_ASSERT_EQUAL_STRING("foo/bar", client->lastPublishTopic.c_str());
+    TEST_ASSERT_EQUAL_STRING("hello", client->lastPublishPayload.c_str());
+}
+
+void test_publish_sends_to_explicit_topic() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+    bool ok = mqtt->publish("my/topic", R"({"hello":1})");
+    TEST_ASSERT_TRUE(ok);
+    TEST_ASSERT_EQUAL_STRING("my/topic", client->lastPublishTopic.c_str());
+    TEST_ASSERT_EQUAL_STRING(R"({"hello":1})", client->lastPublishPayload.c_str());
+    TEST_ASSERT_EQUAL(1, client->publishCount);
+}
+
+void test_publish_fails_when_disconnected() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    // No simulateConnect() — transport is not connected
+    bool ok = mqtt->publish("my/topic", R"({"x":1})");
+    TEST_ASSERT_FALSE(ok);
+    TEST_ASSERT_EQUAL(0, client->publishCount);
+}
+
+void test_publish_with_qos_and_retain() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+    bool ok = mqtt->publish("my/topic", "{\"x\":1}", 1, true);
+    TEST_ASSERT_TRUE(ok);
+    TEST_ASSERT_EQUAL(1, client->lastPublishQos);
+    TEST_ASSERT_TRUE(client->lastPublishRetain);
 }
 
 void test_disconnect_sets_not_connected() {
@@ -250,21 +320,6 @@ void test_reconnect_with_new_path() {
     TEST_ASSERT_EQUAL_STRING("wss://host:443/agents/broker/room789", client->uri.c_str());
     client->simulateConnect();
     TEST_ASSERT_EQUAL(3, client->subscriptionCount);
-}
-
-void test_send_uses_default_publish_topic() {
-    mqtt = createWithTopics();
-    mqtt->begin("host", 443, "/path");
-    auto* client = MockMqttClient::lastInstance();
-    client->simulateConnect();
-    mqtt->loop();
-    mqtt->disconnect();
-    mqtt->begin("host", 443, "/path");
-    client = MockMqttClient::lastInstance();
-    client->simulateConnect();
-    mqtt->loop();
-    mqtt->send("{\"type\":\"test\"}");
-    TEST_ASSERT_EQUAL_STRING("devices/dev123/event", client->lastPublishTopic.c_str());
 }
 
 void test_multiple_connect_disconnect_cycles() {
@@ -388,15 +443,17 @@ void test_message_at_buffer_limit_delivered() {
     TEST_ASSERT_EQUAL(payload.size(), lastDeliveredLength);
 }
 
-void test_single_slot_queue_drops_when_pending() {
+// Bursts arriving before a single drain are now absorbed by the FIFO
+// rather than dropped after the first.
+void test_burst_messages_before_drain_all_delivered() {
     mqtt = createWithTopics();
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
     client->simulateMessage("devices/dev123/command", "{\"type\":\"first\"}");
     client->simulateMessage("devices/dev123/command", "{\"type\":\"second\"}");
     mqtt->loop();
-    TEST_ASSERT_EQUAL(1, deliveredMessageCount);
-    TEST_ASSERT_EQUAL_STRING("{\"type\":\"first\"}", lastDeliveredPayload);
+    TEST_ASSERT_EQUAL(2, deliveredMessageCount);
+    TEST_ASSERT_EQUAL_STRING("{\"type\":\"second\"}", lastDeliveredPayload);
 }
 
 void test_second_message_after_drain() {
@@ -413,7 +470,7 @@ void test_second_message_after_drain() {
 }
 
 void test_set_client_id_before_begin() {
-    mqtt = new CourierMqttTransport();
+    mqtt = new MqttTransport();
     mqtt->setMessageCallback(onMessageCallback);
     mqtt->setClientId("my-custom-id");
     mqtt->begin("host", 443, "/path");
@@ -421,24 +478,11 @@ void test_set_client_id_before_begin() {
     TEST_ASSERT_EQUAL_STRING("my-custom-id", client->clientId.c_str());
 }
 
-void test_set_default_publish_topic() {
-    mqtt = new CourierMqttTransport();
-    mqtt->setMessageCallback(onMessageCallback);
-    mqtt->setDefaultPublishTopic("my/publish/topic");
-    mqtt->begin("host", 443, "/path");
-    auto* client = MockMqttClient::lastInstance();
-    client->simulateConnect();
-    mqtt->loop();
-    bool result = mqtt->send("{\"type\":\"test\"}");
-    TEST_ASSERT_TRUE(result);
-    TEST_ASSERT_EQUAL_STRING("my/publish/topic", client->lastPublishTopic.c_str());
-}
-
 void test_config_cert_pem_passed_to_mqtt_client() {
     static const char* MY_CERT = "-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n";
-    CourierMqttTransportConfig cfg;
+    MqttTransport::Config cfg;
     cfg.cert_pem = MY_CERT;
-    mqtt = new CourierMqttTransport(cfg);
+    mqtt = new MqttTransport(cfg);
     mqtt->setMessageCallback(onMessageCallback);
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
@@ -446,14 +490,14 @@ void test_config_cert_pem_passed_to_mqtt_client() {
 }
 
 void test_mqtt_no_cert_by_default() {
-    mqtt = new CourierMqttTransport();
+    mqtt = new MqttTransport();
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
     TEST_ASSERT_TRUE(client->cert_pem.empty());
 }
 
 void test_mqtt_on_configure_called_before_init() {
-    mqtt = new CourierMqttTransport();
+    mqtt = new MqttTransport();
     mqtt->setMessageCallback(onMessageCallback);
     bool called = false;
     mqtt->onConfigure([&](esp_mqtt_client_config_t& config) {
@@ -469,9 +513,9 @@ void test_mqtt_on_configure_called_before_init() {
 void test_mqtt_on_configure_can_override_config_cert() {
     static const char* ORIGINAL_CERT = "ORIGINAL";
     static const char* OVERRIDE_CERT = "OVERRIDE";
-    CourierMqttTransportConfig cfg;
+    MqttTransport::Config cfg;
     cfg.cert_pem = ORIGINAL_CERT;
-    mqtt = new CourierMqttTransport(cfg);
+    mqtt = new MqttTransport(cfg);
     mqtt->setMessageCallback(onMessageCallback);
     mqtt->onConfigure([](esp_mqtt_client_config_t& config) {
         config.cert_pem = OVERRIDE_CERT;
@@ -482,11 +526,42 @@ void test_mqtt_on_configure_can_override_config_cert() {
 }
 
 void test_mqtt_on_configure_not_set_works() {
-    mqtt = new CourierMqttTransport();
+    mqtt = new MqttTransport();
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
     TEST_ASSERT_NOT_NULL(client);
     TEST_ASSERT_TRUE(client->started);
+}
+
+// Phase 8: topic-aware receive hook — onMessage(topic, payload, len) fires
+// alongside the existing payload-only callbacks, threading topic through the
+// FIFO via the parallel topic queue.
+static int onMessageCount = 0;
+static char lastTopicBuf[256] = "";
+static char lastPayloadBuf[512] = "";
+
+void test_onMessage_receives_topic_and_payload() {
+    onMessageCount = 0;
+    lastTopicBuf[0] = '\0';
+    lastPayloadBuf[0] = '\0';
+
+    mqtt = createWithTopics();
+    mqtt->onMessage([](const char* topic, const char* payload, size_t len) {
+        onMessageCount++;
+        strncpy(lastTopicBuf, topic, sizeof(lastTopicBuf) - 1);
+        lastTopicBuf[sizeof(lastTopicBuf) - 1] = '\0';
+        size_t copyLen = len < sizeof(lastPayloadBuf) - 1 ? len : sizeof(lastPayloadBuf) - 1;
+        memcpy(lastPayloadBuf, payload, copyLen);
+        lastPayloadBuf[copyLen] = '\0';
+    });
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateMessage("devices/foo/temp", "{\"v\":42}");
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, onMessageCount);
+    TEST_ASSERT_EQUAL_STRING("devices/foo/temp", lastTopicBuf);
+    TEST_ASSERT_EQUAL_STRING("{\"v\":42}", lastPayloadBuf);
 }
 
 int main(int argc, char **argv) {
@@ -504,13 +579,16 @@ int main(int argc, char **argv) {
     RUN_TEST(test_status_message_delivered);
     RUN_TEST(test_own_event_topic_message_delivered);
     RUN_TEST(test_other_device_event_delivered);
-    RUN_TEST(test_send_publishes_to_default_publish_topic);
-    RUN_TEST(test_send_fails_when_disconnected);
-    RUN_TEST(test_send_fails_without_publish_topic);
+    RUN_TEST(test_send_requires_topic);
+    RUN_TEST(test_send_with_topic_publishes);
+    RUN_TEST(test_publish_json_overload_serializes);
+    RUN_TEST(test_publish_raw_payload);
+    RUN_TEST(test_publish_sends_to_explicit_topic);
+    RUN_TEST(test_publish_fails_when_disconnected);
+    RUN_TEST(test_publish_with_qos_and_retain);
     RUN_TEST(test_disconnect_sets_not_connected);
     RUN_TEST(test_reconnect_after_disconnect);
     RUN_TEST(test_reconnect_with_new_path);
-    RUN_TEST(test_send_uses_default_publish_topic);
     RUN_TEST(test_multiple_connect_disconnect_cycles);
     RUN_TEST(test_reconnect_creates_fresh_client);
     RUN_TEST(test_reconnect_exact_subscription_count);
@@ -519,14 +597,14 @@ int main(int argc, char **argv) {
     RUN_TEST(test_multiple_room_changes_no_accumulation);
     RUN_TEST(test_large_command_message_delivered);
     RUN_TEST(test_message_at_buffer_limit_delivered);
-    RUN_TEST(test_single_slot_queue_drops_when_pending);
+    RUN_TEST(test_burst_messages_before_drain_all_delivered);
     RUN_TEST(test_second_message_after_drain);
     RUN_TEST(test_set_client_id_before_begin);
-    RUN_TEST(test_set_default_publish_topic);
     RUN_TEST(test_config_cert_pem_passed_to_mqtt_client);
     RUN_TEST(test_mqtt_no_cert_by_default);
     RUN_TEST(test_mqtt_on_configure_called_before_init);
     RUN_TEST(test_mqtt_on_configure_can_override_config_cert);
     RUN_TEST(test_mqtt_on_configure_not_set_works);
+    RUN_TEST(test_onMessage_receives_topic_and_payload);
     return UNITY_END();
 }

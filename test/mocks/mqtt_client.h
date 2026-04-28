@@ -97,6 +97,8 @@ public:
     std::string lastPublishTopic;
     std::string lastPublishPayload;
     int publishCount = 0;
+    int lastPublishQos = 0;
+    bool lastPublishRetain = false;
 
     void simulateConnect() {
         connected = true;
@@ -210,7 +212,6 @@ inline int esp_mqtt_client_publish(
     const char* topic, const char* data, int len,
     int qos, int retain)
 {
-    (void)qos; (void)retain;
     if (!client->connected) return -1;
     client->lastPublishTopic = topic;
     if (len == 0 && data) {
@@ -218,6 +219,8 @@ inline int esp_mqtt_client_publish(
     } else if (data) {
         client->lastPublishPayload = std::string(data, len);
     }
+    client->lastPublishQos = qos;
+    client->lastPublishRetain = (retain != 0);
     client->publishCount++;
     return 0;
 }

@@ -1,5 +1,6 @@
-#include "CourierMqttTransport.h"
+#include "MqttTransport.h"
 #include <cstring>
+#include <cstdlib>
 
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
@@ -19,42 +20,51 @@ static const char* TAG = "MqttTransport";
 static const char* TAG = "MqttTransport";
 #endif
 
-CourierMqttTransport::CourierMqttTransport()
+namespace Courier {
+
+MqttTransport::MqttTransport()
 {
 }
 
-CourierMqttTransport::CourierMqttTransport(const CourierMqttTransportConfig& config)
+MqttTransport::MqttTransport(const Config& config)
     : _certPem(config.cert_pem),
+      _taskStack(config.task_stack),
       _topics(config.topics.begin(), config.topics.end())
 {
     if (config.clientId) {
         _configClientId = config.clientId;
     }
-    if (config.defaultPublishTopic) {
-        _defaultPublishTopic = config.defaultPublishTopic;
-    }
 }
 
-void CourierMqttTransport::onConfigure(ConfigureCallback cb)
+void MqttTransport::onConfigure(ConfigureCallback cb)
 {
     _configureCallback = cb;
 }
 
-CourierMqttTransport::~CourierMqttTransport()
+MqttTransport::~MqttTransport()
 {
     destroyClient();
     freeReassemblyBuf();
+    char* topic = nullptr;
+    while (_topicQueue.pop(topic)) free(topic);
+    // Note: base class destructor drains _pending and frees its payloads.
 }
 
-void CourierMqttTransport::freeReassemblyBuf()
+void MqttTransport::freeReassemblyBuf()
 {
-    free(_reassemblyBuf);
-    _reassemblyBuf = nullptr;
+    if (_reassemblyBuf) {
+        free(_reassemblyBuf);
+        _reassemblyBuf = nullptr;
+    }
+    if (_reassemblyTopic) {
+        free(_reassemblyTopic);
+        _reassemblyTopic = nullptr;
+    }
     _reassemblyLen = 0;
     _reassemblyPos = 0;
 }
 
-void CourierMqttTransport::destroyClient()
+void MqttTransport::destroyClient()
 {
     if (_client) {
         esp_mqtt_client_stop(_client);
@@ -66,7 +76,7 @@ void CourierMqttTransport::destroyClient()
     _selfHealActive = false;
 }
 
-void CourierMqttTransport::subscribeAll()
+void MqttTransport::subscribeAll()
 {
     if (!_client) return;
     for (const auto& topic : _topics) {
@@ -74,7 +84,7 @@ void CourierMqttTransport::subscribeAll()
     }
 }
 
-void CourierMqttTransport::subscribe(const char* topic, int qos)
+void MqttTransport::subscribe(const char* topic, int qos)
 {
     // Add to list if not already present.
     for (const auto& t : _topics) {
@@ -86,7 +96,7 @@ void CourierMqttTransport::subscribe(const char* topic, int qos)
     }
 }
 
-void CourierMqttTransport::unsubscribe(const char* topic)
+void MqttTransport::unsubscribe(const char* topic)
 {
     for (auto it = _topics.begin(); it != _topics.end(); ++it) {
         if (*it == topic) {
@@ -99,12 +109,7 @@ void CourierMqttTransport::unsubscribe(const char* topic)
     }
 }
 
-bool CourierMqttTransport::publish(const char* topic, const char* payload)
-{
-    return publish(topic, payload, 0, false);
-}
-
-bool CourierMqttTransport::publish(const char* topic, const char* payload,
+bool MqttTransport::publish(const char* topic, const char* payload,
                                     int qos, bool retain)
 {
     if (!_client || !_connected.load(std::memory_order_acquire)) return false;
@@ -113,7 +118,25 @@ bool CourierMqttTransport::publish(const char* topic, const char* payload,
     return result >= 0;
 }
 
-void CourierMqttTransport::begin(const char* host, uint16_t port, const char* path)
+bool MqttTransport::publish(const char* topic, JsonDocument& doc,
+                            int qos, bool retain)
+{
+    char buf[1024];
+    size_t n = serializeJson(doc, buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return false;
+    return publish(topic, buf, qos, retain);
+}
+
+bool MqttTransport::send(JsonDocument& doc, const SendOptions& options)
+{
+    if (!options.topic) return false;  // MQTT requires a topic
+    char buf[1024];
+    size_t n = serializeJson(doc, buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return false;
+    return publish(options.topic, buf, options.qos, options.retain);
+}
+
+void MqttTransport::begin(const char* host, uint16_t port, const char* path)
 {
     // Tear down previous client cleanly
     destroyClient();
@@ -137,14 +160,14 @@ void CourierMqttTransport::begin(const char* host, uint16_t port, const char* pa
         config.broker.verification.certificate = _certPem;
     }
     config.credentials.client_id = _configClientId.empty() ? nullptr : _configClientId.c_str();
-    config.task.stack_size = 8192;
+    config.task.stack_size = _taskStack;
 #else
     config.uri = uri.c_str();
     if (_certPem) {
         config.cert_pem = _certPem;
     }
     config.client_id = _configClientId.empty() ? nullptr : _configClientId.c_str();
-    config.task_stack = 8192;
+    config.task_stack = _taskStack;
     config.user_context = this;
 #endif
 
@@ -157,41 +180,64 @@ void CourierMqttTransport::begin(const char* host, uint16_t port, const char* pa
     esp_mqtt_client_start(_client);
 }
 
-void CourierMqttTransport::disconnect()
+void MqttTransport::disconnect()
 {
     destroyClient();
     _selfHealActive = false;
 }
 
-bool CourierMqttTransport::isConnected() const
+bool MqttTransport::isConnected() const
 {
     return _client && _connected.load(std::memory_order_acquire);
 }
 
-bool CourierMqttTransport::send(const char* payload)
+void MqttTransport::queueIncomingMqttMessage(const char* topic, const char* payload, size_t len)
 {
-    if (!_client || !_connected.load(std::memory_order_acquire) ||
-        _defaultPublishTopic.empty()) return false;
-    int result = esp_mqtt_client_publish(_client, _defaultPublishTopic.c_str(),
-                                          payload, 0, 0, 0);
-    return result >= 0;
+    // Push payload first. If the topic push fails after, that one message
+    // gets _onMessage / _clientHook but no _onTopicMessage — bounded loss.
+    // Pushing topic first risks a permanent index-shift if payload then
+    // fails, which is much worse.
+    queueIncomingMessage(payload, len);  // base; silent drop on failure
+
+    char* topicCopy = strdup(topic);
+    if (!topicCopy) return;
+    if (!_topicQueue.push(topicCopy)) {
+        free(topicCopy);
+    }
 }
 
-void CourierMqttTransport::loop()
+void MqttTransport::loop()
 {
-    drainPending();
+    PendingMessage pmsg;
+    char* topic = nullptr;
+    while (_pending.pop(pmsg)) {
+        bool gotTopic = _topicQueue.pop(topic);
+        if (!pmsg.isBinary) {
+            if (_onTopicMessage && gotTopic) {
+                _onTopicMessage(topic, (const char*)pmsg.payload, pmsg.length);
+            }
+            if (_onMessage) _onMessage((const char*)pmsg.payload, pmsg.length);
+            if (_clientHook) _clientHook((const char*)pmsg.payload, pmsg.length);
+        } else {
+            if (_onBinaryMessage) _onBinaryMessage((const uint8_t*)pmsg.payload, pmsg.length);
+        }
+        if (gotTopic) free(topic);
+        free(pmsg.payload);
+    }
+
     if (_selfHealActive) {
         if (_connected.load(std::memory_order_acquire)) {
             _selfHealActive = false;
         } else if (millis() - _disconnectedSinceMillis >= SELF_HEAL_TIMEOUT) {
             _selfHealActive = false;
             queueTransportFailed();
-            drainPending();  // Deliver failure callback immediately
         }
     }
+
+    drainSignals();
 }
 
-void CourierMqttTransport::suspend()
+void MqttTransport::suspend()
 {
     if (_client) {
         ESP_LOGI(TAG, "Suspending (freeing task stack)");
@@ -200,7 +246,7 @@ void CourierMqttTransport::suspend()
     }
 }
 
-void CourierMqttTransport::resume()
+void MqttTransport::resume()
 {
     if (_client) {
         ESP_LOGI(TAG, "Resuming");
@@ -208,13 +254,13 @@ void CourierMqttTransport::resume()
     }
 }
 
-void CourierMqttTransport::mqttEventHandler(void* handler_arg,
+void MqttTransport::mqttEventHandler(void* handler_arg,
                                               esp_event_base_t base,
                                               int32_t event_id,
                                               void* event_data)
 {
     (void)base;
-    auto* self = (CourierMqttTransport*)handler_arg;
+    auto* self = (MqttTransport*)handler_arg;
     auto* event = (esp_mqtt_event_handle_t)event_data;
 
     switch (event_id) {
@@ -243,11 +289,22 @@ void CourierMqttTransport::mqttEventHandler(void* handler_arg,
         // Single-chunk message (fits in library's 1KB buffer)
         if (event->total_data_len == event->data_len && event->current_data_offset == 0) {
             self->freeReassemblyBuf();
-            self->queueIncomingMessage(event->data, event->data_len);
+            // Heap-allocate the topic to avoid silent truncation of topics
+            // longer than a fixed stack buffer. Topic is not NUL-terminated
+            // in the IDF event. queueIncomingMqttMessage strdups internally,
+            // so the local copy can be freed immediately after.
+            char* topicCopy = (char*)malloc(event->topic_len + 1);
+            if (!topicCopy) break;
+            memcpy(topicCopy, event->topic, event->topic_len);
+            topicCopy[event->topic_len] = '\0';
+            self->queueIncomingMqttMessage(topicCopy, event->data, event->data_len);
+            free(topicCopy);
             break;
         }
 
-        // Multi-chunk: reassemble into PSRAM to keep internal SRAM free
+        // Multi-chunk: reassemble into PSRAM to keep internal SRAM free.
+        // First chunk allocates buffer + captures topic (only first chunk
+        // has event->topic per IDF docs).
         if (event->current_data_offset == 0) {
             self->freeReassemblyBuf();
 #ifdef ESP_PLATFORM
@@ -258,6 +315,12 @@ void CourierMqttTransport::mqttEventHandler(void* handler_arg,
             if (!self->_reassemblyBuf) break;
             self->_reassemblyLen = event->total_data_len;
             self->_reassemblyPos = 0;
+            // Capture the topic for use when reassembly completes.
+            self->_reassemblyTopic = (char*)malloc(event->topic_len + 1);
+            if (self->_reassemblyTopic) {
+                memcpy(self->_reassemblyTopic, event->topic, event->topic_len);
+                self->_reassemblyTopic[event->topic_len] = '\0';
+            }
         }
 
         if (self->_reassemblyBuf &&
@@ -268,7 +331,8 @@ void CourierMqttTransport::mqttEventHandler(void* handler_arg,
 
             if (self->_reassemblyPos == self->_reassemblyLen) {
                 self->_reassemblyBuf[self->_reassemblyLen] = '\0';
-                self->queueIncomingMessage(self->_reassemblyBuf, self->_reassemblyLen);
+                const char* topic = self->_reassemblyTopic ? self->_reassemblyTopic : "";
+                self->queueIncomingMqttMessage(topic, self->_reassemblyBuf, self->_reassemblyLen);
                 self->freeReassemblyBuf();
             }
         } else {
@@ -286,3 +350,5 @@ void CourierMqttTransport::mqttEventHandler(void* handler_arg,
         break;
     }
 }
+
+}  // namespace Courier

@@ -1,38 +1,46 @@
 #ifndef COURIER_WS_TRANSPORT_H
 #define COURIER_WS_TRANSPORT_H
 
-#include "CourierTransport.h"
+#include "Transport.h"
 #include <esp_websocket_client.h>
 #include <atomic>
 #include <functional>
 #include <string>
 
-struct CourierWSTransportConfig {
-    const char* cert_pem = nullptr;      // Specific CA cert in PEM format
-    bool use_default_certs = true;       // Use Courier's built-in root CA certs (GTS Root R4)
-};
+namespace Courier {
 
-class CourierWSTransport : public CourierTransport {
+class WebSocketTransport : public Transport {
 public:
-    CourierWSTransport();
-    explicit CourierWSTransport(const CourierWSTransportConfig& config);
-    ~CourierWSTransport();
+    struct Config {
+        const char* cert_pem = nullptr;      // Specific CA cert in PEM format
+        bool use_default_certs = true;       // Use Courier's built-in root CA certs (GTS Root R4)
+    };
+
+    WebSocketTransport();
+    explicit WebSocketTransport(const Config& config);
+    ~WebSocketTransport();
 
     // Raw IDF config access — called after Courier fills its fields, before init.
     // Use for custom headers, subprotocol, ping settings, cert, etc.
-#ifdef ESP_PLATFORM
     using ConfigureCallback = std::function<void(esp_websocket_client_config_t&)>;
-#else
-    using ConfigureCallback = std::function<void(esp_websocket_client_config_t&)>;
-#endif
     void onConfigure(ConfigureCallback cb);
     void useDefaultCerts();  // Use Courier's built-in root CA certs (GTS Root R4)
+
+    // Per-frame-type receive hooks.
+    using TextCallback = std::function<void(const char* payload, size_t length)>;
+    using BinaryCallback = std::function<void(const uint8_t* data, size_t length)>;
+
+    void onText(TextCallback cb)   { setMessageCallback(cb); }
+    void onBinary(BinaryCallback cb) { setBinaryMessageCallback(cb); }
 
     void begin(const char* host, uint16_t port, const char* path) override;
     void disconnect() override;
     bool isConnected() const override;
-    bool send(const char* payload) override;
-    bool sendBinary(const uint8_t* data, size_t len) override;
+    bool send(JsonDocument& doc, const SendOptions& options = {}) override;
+    bool sendText(const char* payload);
+    // WS-specific binary frame send (not on Transport base — binary is a
+    // WebSocket protocol concept).
+    bool sendBinary(const uint8_t* data, size_t len);
     const char* name() const override { return "WebSocket"; }
     void suspend() override;
     void resume() override;
@@ -54,10 +62,12 @@ private:
 
     void destroyClient();
 
-    // PSRAM reassembly buffer for fragmented messages
+    // PSRAM reassembly buffer for chunked frames. Shared between text
+    // and binary paths — only one frame is in flight per transport at a time.
     char* _reassemblyBuf = nullptr;
     size_t _reassemblyLen = 0;
     size_t _reassemblyPos = 0;
+    bool _reassemblyIsBinary = false;
     void freeReassemblyBuf();
 
     static void wsEventHandler(void* handler_arg,
@@ -65,5 +75,7 @@ private:
                                 int32_t event_id,
                                 void* event_data);
 };
+
+}  // namespace Courier
 
 #endif // COURIER_WS_TRANSPORT_H

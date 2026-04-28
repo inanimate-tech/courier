@@ -19,3 +19,5 @@ examples/**/CMakeLists.txt
 # project-level and main/ CMakeLists committed.
 !examples/espidf-basic/CMakeLists.txt
 !examples/espidf-basic/main/CMakeLists.txt
+# Per-example clangd index caches.
+**/.cache/
