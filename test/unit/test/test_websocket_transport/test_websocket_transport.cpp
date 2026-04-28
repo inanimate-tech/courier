@@ -286,6 +286,37 @@ void test_binary_chunked_message_reassembled() {
     TEST_ASSERT_EQUAL(0, deliveredMessageCount);
 }
 
+// Phase 8: typed wrappers — onText / onBinary route to the same slots as
+// setMessageCallback / setBinaryMessageCallback, but with frame-type-named API.
+void test_onText_receives_text_frames() {
+    int textCount = 0;
+    std::string lastPayload;
+    ws->onText([&](const char* payload, size_t len) {
+        textCount++;
+        lastPayload = std::string(payload, len);
+    });
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    client->simulateTextMessage("{\"hello\":1}");
+    ws->loop();
+    TEST_ASSERT_EQUAL(1, textCount);
+    TEST_ASSERT_EQUAL_STRING("{\"hello\":1}", lastPayload.c_str());
+}
+
+void test_onBinary_receives_binary_frames() {
+    int binaryCount = 0;
+    ws->onBinary([&](const uint8_t* data, size_t len) {
+        (void)data; (void)len;
+        binaryCount++;
+    });
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    const uint8_t payload[] = {0xAA, 0xBB};
+    client->simulateBinaryMessage(payload, sizeof(payload));
+    ws->loop();
+    TEST_ASSERT_EQUAL(1, binaryCount);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_name_is_ws);
@@ -310,5 +341,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_fifo_absorbs_burst_before_drain);
     RUN_TEST(test_binary_message_delivered_to_callback);
     RUN_TEST(test_binary_chunked_message_reassembled);
+    RUN_TEST(test_onText_receives_text_frames);
+    RUN_TEST(test_onBinary_receives_binary_frames);
     return UNITY_END();
 }

@@ -26,6 +26,13 @@ public:
     void onConfigure(ConfigureCallback cb);
     void useDefaultCerts();  // Use Courier's built-in root CA certs (GTS Root R4)
 
+    // Per-frame-type receive hooks.
+    using TextCallback = std::function<void(const char* payload, size_t length)>;
+    using BinaryCallback = std::function<void(const uint8_t* data, size_t length)>;
+
+    void onText(TextCallback cb)   { setMessageCallback(cb); }
+    void onBinary(BinaryCallback cb) { setBinaryMessageCallback(cb); }
+
     void begin(const char* host, uint16_t port, const char* path) override;
     void disconnect() override;
     bool isConnected() const override;

@@ -62,6 +62,13 @@ public:
     // Publish with explicit QoS and retain control.
     bool publish(const char* topic, const char* payload, int qos, bool retain);
 
+    // Per-MQTT topic-aware receive hook. Fires for every incoming message,
+    // alongside Client::onMessage (which JSON-parses the payload only — no
+    // topic). For text-only / non-JSON payloads, this is the only path.
+    using TopicMessageCallback =
+        std::function<void(const char* topic, const char* payload, size_t length)>;
+    void onMessage(TopicMessageCallback cb) { _onTopicMessage = cb; }
+
     void loop() override;
 
 private:
@@ -88,7 +95,17 @@ private:
     char* _reassemblyBuf = nullptr;
     size_t _reassemblyLen = 0;
     size_t _reassemblyPos = 0;
+    char* _reassemblyTopic = nullptr;  // topic captured on first chunk
     void freeReassemblyBuf();
+
+    TopicMessageCallback _onTopicMessage;
+
+    // Parallel topic queue, in lockstep with the base class's _pending FIFO.
+    // Stores topic strings (heap-allocated, freed on drain).
+    static constexpr size_t TOPIC_QUEUE_DEPTH = 8;
+    SpscQueue<char*, TOPIC_QUEUE_DEPTH> _topicQueue;
+
+    void queueIncomingMqttMessage(const char* topic, const char* payload, size_t len);
 
     static void mqttEventHandler(void* handler_arg,
                                   esp_event_base_t base,

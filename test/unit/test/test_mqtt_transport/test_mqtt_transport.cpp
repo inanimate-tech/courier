@@ -445,6 +445,37 @@ void test_mqtt_on_configure_not_set_works() {
     TEST_ASSERT_TRUE(client->started);
 }
 
+// Phase 8: topic-aware receive hook — onMessage(topic, payload, len) fires
+// alongside the existing payload-only callbacks, threading topic through the
+// FIFO via the parallel topic queue.
+static int onMessageCount = 0;
+static char lastTopicBuf[256] = "";
+static char lastPayloadBuf[512] = "";
+
+void test_onMessage_receives_topic_and_payload() {
+    onMessageCount = 0;
+    lastTopicBuf[0] = '\0';
+    lastPayloadBuf[0] = '\0';
+
+    mqtt = createWithTopics();
+    mqtt->onMessage([](const char* topic, const char* payload, size_t len) {
+        onMessageCount++;
+        strncpy(lastTopicBuf, topic, sizeof(lastTopicBuf) - 1);
+        lastTopicBuf[sizeof(lastTopicBuf) - 1] = '\0';
+        size_t copyLen = len < sizeof(lastPayloadBuf) - 1 ? len : sizeof(lastPayloadBuf) - 1;
+        memcpy(lastPayloadBuf, payload, copyLen);
+        lastPayloadBuf[copyLen] = '\0';
+    });
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateMessage("devices/foo/temp", "{\"v\":42}");
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, onMessageCount);
+    TEST_ASSERT_EQUAL_STRING("devices/foo/temp", lastTopicBuf);
+    TEST_ASSERT_EQUAL_STRING("{\"v\":42}", lastPayloadBuf);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_name_is_mqtt);
@@ -480,5 +511,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_mqtt_on_configure_called_before_init);
     RUN_TEST(test_mqtt_on_configure_can_override_config_cert);
     RUN_TEST(test_mqtt_on_configure_not_set_works);
+    RUN_TEST(test_onMessage_receives_topic_and_payload);
     return UNITY_END();
 }

@@ -1,5 +1,6 @@
 #include "MqttTransport.h"
 #include <cstring>
+#include <cstdlib>
 
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
@@ -43,12 +44,21 @@ MqttTransport::~MqttTransport()
 {
     destroyClient();
     freeReassemblyBuf();
+    char* topic = nullptr;
+    while (_topicQueue.pop(topic)) free(topic);
+    // Note: base class destructor drains _pending and frees its payloads.
 }
 
 void MqttTransport::freeReassemblyBuf()
 {
-    free(_reassemblyBuf);
-    _reassemblyBuf = nullptr;
+    if (_reassemblyBuf) {
+        free(_reassemblyBuf);
+        _reassemblyBuf = nullptr;
+    }
+    if (_reassemblyTopic) {
+        free(_reassemblyTopic);
+        _reassemblyTopic = nullptr;
+    }
     _reassemblyLen = 0;
     _reassemblyPos = 0;
 }
@@ -167,16 +177,58 @@ bool MqttTransport::isConnected() const
     return _client && _connected.load(std::memory_order_acquire);
 }
 
+void MqttTransport::queueIncomingMqttMessage(const char* topic, const char* payload, size_t len)
+{
+    char* topicCopy = strdup(topic);
+    if (!topicCopy) return;
+    if (!_topicQueue.push(topicCopy)) {
+        free(topicCopy);
+        return;  // bail without enqueuing payload — keep queues paired
+    }
+    queueIncomingMessage(payload, len);  // base class enqueues payload
+}
+
 void MqttTransport::loop()
 {
-    drainPending();
+    PendingMessage pmsg;
+    char* topic = nullptr;
+    while (_pending.pop(pmsg)) {
+        bool gotTopic = _topicQueue.pop(topic);
+        if (!pmsg.isBinary) {
+            if (_onTopicMessage && gotTopic) {
+                _onTopicMessage(topic, (const char*)pmsg.payload, pmsg.length);
+            }
+            if (_onMessage) _onMessage((const char*)pmsg.payload, pmsg.length);
+            if (_clientHook) _clientHook((const char*)pmsg.payload, pmsg.length);
+        } else {
+            if (_onBinaryMessage) _onBinaryMessage((const uint8_t*)pmsg.payload, pmsg.length);
+        }
+        if (gotTopic && topic) free(topic);
+        free(pmsg.payload);
+    }
+
+    // Drain connection-change and failure flags as base would.
+    if (_connChangePending.load(std::memory_order_acquire)) {
+        bool state = _connChangeState.load(std::memory_order_relaxed);
+        _connChangePending.store(false, std::memory_order_release);
+        if (_onConnection) _onConnection(this, state);
+    }
+    if (_failurePending.load(std::memory_order_acquire)) {
+        _failurePending.store(false, std::memory_order_release);
+        if (_onFailure) _onFailure();
+    }
+
     if (_selfHealActive) {
         if (_connected.load(std::memory_order_acquire)) {
             _selfHealActive = false;
         } else if (millis() - _disconnectedSinceMillis >= SELF_HEAL_TIMEOUT) {
             _selfHealActive = false;
             queueTransportFailed();
-            drainPending();  // Deliver failure callback immediately
+            // Deliver failure callback immediately.
+            if (_failurePending.load(std::memory_order_acquire)) {
+                _failurePending.store(false, std::memory_order_release);
+                if (_onFailure) _onFailure();
+            }
         }
     }
 }
@@ -233,11 +285,20 @@ void MqttTransport::mqttEventHandler(void* handler_arg,
         // Single-chunk message (fits in library's 1KB buffer)
         if (event->total_data_len == event->data_len && event->current_data_offset == 0) {
             self->freeReassemblyBuf();
-            self->queueIncomingMessage(event->data, event->data_len);
+            // Stack-allocated topic copy for the single-chunk fast path.
+            // Topic is not NUL-terminated in the IDF event.
+            char topicBuf[128];
+            size_t topicLen = (size_t)event->topic_len < sizeof(topicBuf) - 1
+                                ? (size_t)event->topic_len : sizeof(topicBuf) - 1;
+            memcpy(topicBuf, event->topic, topicLen);
+            topicBuf[topicLen] = '\0';
+            self->queueIncomingMqttMessage(topicBuf, event->data, event->data_len);
             break;
         }
 
-        // Multi-chunk: reassemble into PSRAM to keep internal SRAM free
+        // Multi-chunk: reassemble into PSRAM to keep internal SRAM free.
+        // First chunk allocates buffer + captures topic (only first chunk
+        // has event->topic per IDF docs).
         if (event->current_data_offset == 0) {
             self->freeReassemblyBuf();
 #ifdef ESP_PLATFORM
@@ -248,6 +309,12 @@ void MqttTransport::mqttEventHandler(void* handler_arg,
             if (!self->_reassemblyBuf) break;
             self->_reassemblyLen = event->total_data_len;
             self->_reassemblyPos = 0;
+            // Capture the topic for use when reassembly completes.
+            self->_reassemblyTopic = (char*)malloc(event->topic_len + 1);
+            if (self->_reassemblyTopic) {
+                memcpy(self->_reassemblyTopic, event->topic, event->topic_len);
+                self->_reassemblyTopic[event->topic_len] = '\0';
+            }
         }
 
         if (self->_reassemblyBuf &&
@@ -258,7 +325,8 @@ void MqttTransport::mqttEventHandler(void* handler_arg,
 
             if (self->_reassemblyPos == self->_reassemblyLen) {
                 self->_reassemblyBuf[self->_reassemblyLen] = '\0';
-                self->queueIncomingMessage(self->_reassemblyBuf, self->_reassemblyLen);
+                const char* topic = self->_reassemblyTopic ? self->_reassemblyTopic : "";
+                self->queueIncomingMqttMessage(topic, self->_reassemblyBuf, self->_reassemblyLen);
                 self->freeReassemblyBuf();
             }
         } else {
