@@ -74,6 +74,7 @@ private:
     bool _selfHealActive = false;
 
     const char* _certPem = nullptr;
+    int _taskStack = 8192;
     ConfigureCallback _configureCallback;
 
     esp_mqtt_client_handle_t _client = nullptr;

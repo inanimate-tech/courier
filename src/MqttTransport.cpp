@@ -28,6 +28,7 @@ MqttTransport::MqttTransport()
 
 MqttTransport::MqttTransport(const Config& config)
     : _certPem(config.cert_pem),
+      _taskStack(config.task_stack),
       _topics(config.topics.begin(), config.topics.end())
 {
     if (config.clientId) {
@@ -159,14 +160,14 @@ void MqttTransport::begin(const char* host, uint16_t port, const char* path)
         config.broker.verification.certificate = _certPem;
     }
     config.credentials.client_id = _configClientId.empty() ? nullptr : _configClientId.c_str();
-    config.task.stack_size = 8192;
+    config.task.stack_size = _taskStack;
 #else
     config.uri = uri.c_str();
     if (_certPem) {
         config.cert_pem = _certPem;
     }
     config.client_id = _configClientId.empty() ? nullptr : _configClientId.c_str();
-    config.task_stack = 8192;
+    config.task_stack = _taskStack;
     config.user_context = this;
 #endif
 

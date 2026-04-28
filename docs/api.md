@@ -95,7 +95,7 @@ courier.resume();
 ### State
 
 ```cpp
-courier.isConnected();     // true when all persistent transports are connected
+courier.isConnected();     // true when at least one registered transport is connected
 courier.getState();        // Courier::State
 courier.isTimeSynced();    // true after NTP or HTTP Date sync
 ```
@@ -462,7 +462,7 @@ Incoming packets are dispatched to `Client::onMessage` if they parse as JSON. Th
 
 ## `Courier::Endpoint`
 
-Per-transport endpoint override. Used internally by Client. End users typically set the endpoint by calling `transport.begin(host, port, path)` directly when ready (e.g. inside `onTransportsWillConnect`).
+Internal struct holding host/port/path overrides per transport. There is no public setter in 0.4.0 — the field exists in the registry for future use. End users set per-transport endpoints by calling `transport.begin(host, port, path)` directly when the values are ready (e.g. inside `onTransportsWillConnect`); transports without an explicit `begin` call inherit `Config::host/port/path` at the `TransportsConnecting` state transition.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
