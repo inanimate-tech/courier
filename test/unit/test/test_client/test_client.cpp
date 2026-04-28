@@ -232,6 +232,20 @@ void test_connection_change_fires_through_to_connected() {
     TEST_ASSERT_TRUE(states[3] == State::Connected);
 }
 
+void test_no_builtin_ws_when_host_null() {
+    delete courier;
+    Config cfg;
+    // host is null by default
+    courier = new Client(cfg);
+    // Without a host, no built-in "ws" is registered. Looking it up
+    // would assert. Instead, register a custom transport — succeeds
+    // because slot 0 is free. (Pre-Phase-9, slot 0 was occupied by
+    // the auto-registered WS, so this would have used slot 1.)
+    courier->addTransport<MockTransport>("ws");
+    auto& mt = courier->transport<MockTransport>("ws");
+    TEST_ASSERT_EQUAL_STRING("MockTransport", mt.name());
+}
+
 void test_dns_config_defaults_to_zero() {
     Config config;
     config.host = "test.example.com";
@@ -263,6 +277,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_on_error_callback_registered);
     RUN_TEST(test_connection_change_fires_on_setup);
     RUN_TEST(test_connection_change_fires_through_to_connected);
+    RUN_TEST(test_no_builtin_ws_when_host_null);
     RUN_TEST(test_dns_config_defaults_to_zero);
     RUN_TEST(test_dns_config_custom_servers);
 

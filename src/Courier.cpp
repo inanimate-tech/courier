@@ -19,9 +19,13 @@ Client::Client(const Config& config)
 {
   _instance = this;
 
-  // Auto-register the built-in WS transport as "ws".
-  // Phase 9 will make this conditional on _config.host being set.
-  addTransport<WebSocketTransport>("ws");
+  // Auto-register a built-in WebSocketTransport as "ws" when the Config
+  // provides a host. Users with no need for the built-in (MQTT-only,
+  // UDP-only, or fully-custom transport setups) leave host null and
+  // register their own transports explicitly.
+  if (_config.host && _config.host[0] != '\0') {
+    addTransport<WebSocketTransport>("ws");
+  }
 }
 
 Client::~Client()
