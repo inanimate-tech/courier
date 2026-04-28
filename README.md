@@ -5,7 +5,7 @@ Batteries-included JSON messaging for ESP32. WiFi and user configuration, WebSoc
 > [!IMPORTANT]
 > Courier is under active development. See [docs/changelog.md](docs/changelog.md) for changes on each release.
 >
-> ⚠️ This is **v0.4.0-dev** and the API has changed considerably.
+> ⚠️ This is **v0.4.0** and the API has changed considerably.
 >
 > To pin to the previous stable version use `lib_deps = https://github.com/inanimate-tech/courier.git#v0.3.2` in your `platformio.ini`.
 >

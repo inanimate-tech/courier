@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.4.0-dev
+## v0.4.0
 
 Theme: rationalising naming and shrinking surface area.
 
