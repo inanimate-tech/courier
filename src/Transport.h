@@ -38,7 +38,6 @@ public:
     virtual void loop() { drainPending(); }
     virtual bool isConnected() const = 0;
     virtual bool send(JsonDocument& doc, const SendOptions& options = {}) = 0;
-    virtual bool sendBinary(const uint8_t* data, size_t len) { (void)data; (void)len; return false; }
     virtual const char* name() const = 0;
 
     virtual void suspend() {}

@@ -40,9 +40,6 @@ public:
         lastOptions = options;
         return true;
     }
-    bool sendBinary(const uint8_t* data, size_t len) override {
-        return _connected;
-    }
     const char* name() const override { return "MockTransport"; }
     void suspend() override { _suspended = true; _connected = false; }
     void resume() override { _suspended = false; }

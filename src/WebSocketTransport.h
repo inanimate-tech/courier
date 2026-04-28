@@ -38,7 +38,9 @@ public:
     bool isConnected() const override;
     bool send(JsonDocument& doc, const SendOptions& options = {}) override;
     bool sendText(const char* payload);
-    bool sendBinary(const uint8_t* data, size_t len) override;
+    // WS-specific binary frame send (not on Transport base — binary is a
+    // WebSocket protocol concept).
+    bool sendBinary(const uint8_t* data, size_t len);
     const char* name() const override { return "WebSocket"; }
     void suspend() override;
     void resume() override;
