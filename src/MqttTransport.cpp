@@ -32,9 +32,6 @@ MqttTransport::MqttTransport(const Config& config)
     if (config.clientId) {
         _configClientId = config.clientId;
     }
-    if (config.defaultPublishTopic) {
-        _defaultPublishTopic = config.defaultPublishTopic;
-    }
 }
 
 void MqttTransport::onConfigure(ConfigureCallback cb)
@@ -168,15 +165,6 @@ void MqttTransport::disconnect()
 bool MqttTransport::isConnected() const
 {
     return _client && _connected.load(std::memory_order_acquire);
-}
-
-bool MqttTransport::send(const char* payload)
-{
-    if (!_client || !_connected.load(std::memory_order_acquire) ||
-        _defaultPublishTopic.empty()) return false;
-    int result = esp_mqtt_client_publish(_client, _defaultPublishTopic.c_str(),
-                                          payload, 0, 0, 0);
-    return result >= 0;
 }
 
 void MqttTransport::loop()

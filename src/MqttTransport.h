@@ -14,12 +14,10 @@ class MqttTransport : public Transport {
 public:
     // Configuration struct for MqttTransport.
     // topics: auto-subscribed on (re)connect.
-    // defaultPublishTopic: if set, send() publishes here.
     // clientId: if set, used as MQTT client ID; otherwise IDF generates one.
     // cert_pem: TLS certificate (nullptr = no cert set by Courier).
     struct Config {
         std::vector<std::string> topics;
-        const char* defaultPublishTopic = nullptr;
         const char* clientId = nullptr;
         const char* cert_pem = nullptr;
         int task_stack = 8192;
@@ -32,7 +30,6 @@ public:
     void begin(const char* host, uint16_t port, const char* path) override;
     void disconnect() override;
     bool isConnected() const override;
-    bool send(const char* payload) override;
     bool topicRequired() const override { return true; }
     const char* name() const override { return "MQTT"; }
     void suspend() override;
@@ -46,8 +43,12 @@ public:
     // Set the MQTT client ID (must be called before begin()).
     void setClientId(const char* clientId) { _configClientId = clientId ? clientId : ""; }
 
-    // Set the default publish topic for send().
-    void setDefaultPublishTopic(const char* topic) { _defaultPublishTopic = topic ? topic : ""; }
+    // MQTT requires a topic — use publish(topic, payload) instead.
+    // This override exists only to satisfy Transport's pure-virtual send().
+    bool send(const char* payload) override {
+        (void)payload;
+        return false;
+    }
 
     // Dynamic topic management.
     // subscribe() adds the topic to the managed list and subscribes immediately
@@ -76,7 +77,6 @@ private:
     std::atomic<bool> _connected{false};
 
     std::string _configClientId;   // optional override from Config
-    std::string _defaultPublishTopic;  // topic for send() broadcast
 
     // Managed topic list — single source of truth for subscriptions.
     std::vector<std::string> _topics;

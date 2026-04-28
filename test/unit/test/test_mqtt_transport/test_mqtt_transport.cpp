@@ -53,7 +53,6 @@ static MqttTransport* createWithTopics(const char* deviceId = "dev123",
 
     MqttTransport::Config cfg;
     cfg.topics = {commandTopic, statusTopic, allEvents};
-    cfg.defaultPublishTopic = eventTopic.c_str();
     std::string clientId = std::string(deviceType) + "-" + deviceId;
     cfg.clientId = clientId.c_str();
 
@@ -179,28 +178,9 @@ void test_other_device_event_delivered() {
     TEST_ASSERT_EQUAL(1, deliveredMessageCount);
 }
 
-void test_send_publishes_to_default_publish_topic() {
+void test_send_always_returns_false() {
+    // send() is a no-op: MQTT requires an explicit topic via publish().
     mqtt = createWithTopics();
-    mqtt->begin("host", 443, "/path");
-    auto* client = MockMqttClient::lastInstance();
-    client->simulateConnect();
-    mqtt->loop();
-    bool result = mqtt->send("{\"type\":\"app_event\"}");
-    TEST_ASSERT_TRUE(result);
-    TEST_ASSERT_EQUAL_STRING("devices/dev123/event", client->lastPublishTopic.c_str());
-    TEST_ASSERT_EQUAL_STRING("{\"type\":\"app_event\"}", client->lastPublishPayload.c_str());
-}
-
-void test_send_fails_when_disconnected() {
-    mqtt = createWithTopics();
-    mqtt->begin("host", 443, "/path");
-    bool result = mqtt->send("{\"type\":\"test\"}");
-    TEST_ASSERT_FALSE(result);
-}
-
-void test_send_fails_without_publish_topic() {
-    mqtt = new MqttTransport();
-    mqtt->setMessageCallback(onMessageCallback);
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
     client->simulateConnect();
@@ -252,21 +232,6 @@ void test_reconnect_with_new_path() {
     TEST_ASSERT_EQUAL_STRING("wss://host:443/agents/broker/room789", client->uri.c_str());
     client->simulateConnect();
     TEST_ASSERT_EQUAL(3, client->subscriptionCount);
-}
-
-void test_send_uses_default_publish_topic() {
-    mqtt = createWithTopics();
-    mqtt->begin("host", 443, "/path");
-    auto* client = MockMqttClient::lastInstance();
-    client->simulateConnect();
-    mqtt->loop();
-    mqtt->disconnect();
-    mqtt->begin("host", 443, "/path");
-    client = MockMqttClient::lastInstance();
-    client->simulateConnect();
-    mqtt->loop();
-    mqtt->send("{\"type\":\"test\"}");
-    TEST_ASSERT_EQUAL_STRING("devices/dev123/event", client->lastPublishTopic.c_str());
 }
 
 void test_multiple_connect_disconnect_cycles() {
@@ -425,19 +390,6 @@ void test_set_client_id_before_begin() {
     TEST_ASSERT_EQUAL_STRING("my-custom-id", client->clientId.c_str());
 }
 
-void test_set_default_publish_topic() {
-    mqtt = new MqttTransport();
-    mqtt->setMessageCallback(onMessageCallback);
-    mqtt->setDefaultPublishTopic("my/publish/topic");
-    mqtt->begin("host", 443, "/path");
-    auto* client = MockMqttClient::lastInstance();
-    client->simulateConnect();
-    mqtt->loop();
-    bool result = mqtt->send("{\"type\":\"test\"}");
-    TEST_ASSERT_TRUE(result);
-    TEST_ASSERT_EQUAL_STRING("my/publish/topic", client->lastPublishTopic.c_str());
-}
-
 void test_config_cert_pem_passed_to_mqtt_client() {
     static const char* MY_CERT = "-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n";
     MqttTransport::Config cfg;
@@ -508,13 +460,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_status_message_delivered);
     RUN_TEST(test_own_event_topic_message_delivered);
     RUN_TEST(test_other_device_event_delivered);
-    RUN_TEST(test_send_publishes_to_default_publish_topic);
-    RUN_TEST(test_send_fails_when_disconnected);
-    RUN_TEST(test_send_fails_without_publish_topic);
+    RUN_TEST(test_send_always_returns_false);
     RUN_TEST(test_disconnect_sets_not_connected);
     RUN_TEST(test_reconnect_after_disconnect);
     RUN_TEST(test_reconnect_with_new_path);
-    RUN_TEST(test_send_uses_default_publish_topic);
     RUN_TEST(test_multiple_connect_disconnect_cycles);
     RUN_TEST(test_reconnect_creates_fresh_client);
     RUN_TEST(test_reconnect_exact_subscription_count);
@@ -526,7 +475,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_burst_messages_before_drain_all_delivered);
     RUN_TEST(test_second_message_after_drain);
     RUN_TEST(test_set_client_id_before_begin);
-    RUN_TEST(test_set_default_publish_topic);
     RUN_TEST(test_config_cert_pem_passed_to_mqtt_client);
     RUN_TEST(test_mqtt_no_cert_by_default);
     RUN_TEST(test_mqtt_on_configure_called_before_init);
