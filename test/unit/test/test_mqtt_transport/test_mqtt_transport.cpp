@@ -244,6 +244,39 @@ void test_publish_raw_payload() {
     TEST_ASSERT_EQUAL_STRING("hello", client->lastPublishPayload.c_str());
 }
 
+void test_publish_sends_to_explicit_topic() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+    bool ok = mqtt->publish("my/topic", R"({"hello":1})");
+    TEST_ASSERT_TRUE(ok);
+    TEST_ASSERT_EQUAL_STRING("my/topic", client->lastPublishTopic.c_str());
+    TEST_ASSERT_EQUAL_STRING(R"({"hello":1})", client->lastPublishPayload.c_str());
+    TEST_ASSERT_EQUAL(1, client->publishCount);
+}
+
+void test_publish_fails_when_disconnected() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    // No simulateConnect() — transport is not connected
+    bool ok = mqtt->publish("my/topic", R"({"x":1})");
+    TEST_ASSERT_FALSE(ok);
+    TEST_ASSERT_EQUAL(0, client->publishCount);
+}
+
+void test_publish_with_qos_and_retain() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+    bool ok = mqtt->publish("my/topic", "{\"x\":1}", 1, true);
+    TEST_ASSERT_TRUE(ok);
+    TEST_ASSERT_EQUAL(1, client->lastPublishQos);
+    TEST_ASSERT_TRUE(client->lastPublishRetain);
+}
+
 void test_disconnect_sets_not_connected() {
     mqtt = createWithTopics();
     mqtt->begin("host", 443, "/path");
@@ -550,6 +583,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_send_with_topic_publishes);
     RUN_TEST(test_publish_json_overload_serializes);
     RUN_TEST(test_publish_raw_payload);
+    RUN_TEST(test_publish_sends_to_explicit_topic);
+    RUN_TEST(test_publish_fails_when_disconnected);
+    RUN_TEST(test_publish_with_qos_and_retain);
     RUN_TEST(test_disconnect_sets_not_connected);
     RUN_TEST(test_reconnect_after_disconnect);
     RUN_TEST(test_reconnect_with_new_path);
