@@ -233,7 +233,7 @@ courier.send(doc);      // via Client::send (if defaultTransport = "ws")
 
 ## Adding transports
 
-`addTransport(name, Transport*)` is now templated `addTransport<T>(name, args...)`. Client constructs and owns the transport.
+`addTransport(name, Transport*)` is now templated `addTransport<T>(name, args...)`. Client constructs and owns the transport, and seeds its endpoint from `Config::host`/`port`/`path` so the static-path-in-Config case keeps working with no further setup.
 
 Old:
 ```cpp
@@ -245,10 +245,38 @@ courier.setEndpoint("mqtt", mqttEndpoint);
 New:
 ```cpp
 auto& mqtt = courier.addTransport<Courier::MqttTransport>("mqtt", mqttCfg);
-// Client owns mqtt now. Set the endpoint by calling begin() directly when
-// the values are ready (e.g. inside onTransportsWillConnect):
-mqtt.begin(host, port, path);
+// Client now owns mqtt. The endpoint is already seeded from Config.
 ```
+
+For late-bound endpoints (e.g. an MQTT path that depends on a registration roundtrip), call `setEndpoint(host, port, path)` from inside `onTransportsWillConnect` — the next state-machine tick reads from the transport, so writes inside the hook aren't clobbered:
+
+```cpp
+courier.onTransportsWillConnect([&]() {
+    String mqttPath = registerAndGetPath();   // your registration roundtrip
+    courier.transport<Courier::MqttTransport>("mqtt")
+        .setEndpoint(HOST, PORT, mqttPath.c_str());
+    // setEndpoint copies the strings, so the String temp dropping out
+    // of scope at the end of this lambda is safe.
+});
+```
+
+`setEndpoint` is virtual and accepts either three primitives or a `Courier::Endpoint` struct. The 3-arg `begin(host, port, path)` form is still available as sugar for `setEndpoint(...) + begin()` if you'd rather call begin directly.
+
+## Manual reconnect
+
+New: `Client::reconnect()` triggers the connection-recovery state machine. Tears down transports, fires `onDisconnected`, transitions to `State::Reconnecting`. Adaptive — the handler checks WiFi and re-runs the WiFi step if needed. `onTransportsWillConnect` re-fires on the way back through `TransportsConnecting`.
+
+Use this for re-registration flows or any "kick the connection cycle" trigger:
+
+```cpp
+void onReregisterRequested() {
+    _roomId = "";  // clear application state
+    courier.reconnect();
+    // onTransportsWillConnect re-fires; your registration logic re-runs.
+}
+```
+
+In 0.3.x this required scattered `mqtt.disconnect()` / re-fetch / `mqtt.begin()` calls. In 0.4 it's a single method.
 
 ## Suspend / resume
 
@@ -277,7 +305,9 @@ ws.sendText(R"({"type":"hello"})");
 
 ## Custom transport authors
 
-The `Transport` base virtual changed signature. If you subclass `Transport`, update your override:
+If you subclass `Courier::Transport` directly, three things changed in 0.4. Built-in transport users (`WebSocketTransport`, `MqttTransport`, `UdpTransport`) need no changes; this section is only for code that derives from the base class.
+
+**1. `send` override signature.**
 
 Old:
 ```cpp
@@ -294,7 +324,40 @@ bool send(JsonDocument& doc, const Courier::SendOptions& options = {}) override 
 }
 ```
 
-`sendBinary` and `publish` are no longer on the base — remove those overrides unless your transport genuinely supports them as custom extensions.
+**2. `begin` override is zero-arg, reads host/port/path from base members.**
+
+Old:
+```cpp
+void begin(const char* host, uint16_t port, const char* path) override {
+    // open a connection to host:port/path
+}
+```
+
+New:
+```cpp
+void begin() override {
+    // host/port/path are stored in the protected base members
+    // _host (std::string), _port (uint16_t), _path (std::string).
+    // Client::addTransport seeds them from Config; users can override
+    // via setEndpoint() before begin() runs.
+    open(_host.c_str(), _port, _path.c_str());
+}
+```
+
+If your subclass also wants to accept the 3-arg `begin(host, port, path)` sugar form on its own type (rather than only on the base), add `using Transport::begin;` to its public section to unhide the base's non-virtual overload — otherwise C++ name-hiding makes the 3-arg form invisible on the derived type. The built-in transports do this:
+
+```cpp
+class MyTransport : public Courier::Transport {
+public:
+    using Transport::begin;   // unhide 3-arg sugar
+    void begin() override { /* ... */ }
+    // ...
+};
+```
+
+**3. `sendBinary` and `publish` are no longer on the base.**
+
+Remove those overrides unless your transport genuinely supports those operations — and if it does, they're class-specific methods, not overrides. (`WebSocketTransport::sendBinary` and `MqttTransport::publish` are class-specific in the built-in transports too — symmetric with the surface principle that wire verbs live on the transport that actually offers them.)
 
 ## Multiple WebSocket transports
 

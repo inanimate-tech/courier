@@ -16,6 +16,8 @@ Theme: per-transport endpoint state + manual reconnect trigger.
 
 If you subclass `Courier::Transport` directly, the override point for `begin` changed. Migrate `void begin(const char* host, uint16_t port, const char* path) override` → `void begin() override` and read host/port/path from the base members `_host` / `_port` / `_path`. End users of built-in transports (`WebSocketTransport`, `MqttTransport`, `UdpTransport`) need no changes; the 3-arg `begin(host, port, path)` overload still works as sugar.
 
+If your subclass wants to keep accepting the 3-arg sugar form via the same-name override, add `using Transport::begin;` in the subclass's public section to unhide the base's non-virtual 3-arg overload (C++ name-hiding rule). The built-in transports do this.
+
 ### Internal
 
 - `Client::TransportEntry::endpoint` field removed — endpoint state now lives on each transport. `handleTransportsConnectingState` calls zero-arg `transport->begin()` directly; the per-transport-vs-Config fallback computation is gone.
