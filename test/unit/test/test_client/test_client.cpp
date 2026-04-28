@@ -91,12 +91,12 @@ void tearDown(void) {
 }
 
 void test_initial_state() {
-    TEST_ASSERT_EQUAL(COURIER_BOOTING, courier->getState());
+    TEST_ASSERT_TRUE(courier->getState() == State::Booting);
 }
 
 void test_setup_transitions_to_wifi_connecting() {
     courier->setup();
-    TEST_ASSERT_EQUAL(COURIER_WIFI_CONNECTING, courier->getState());
+    TEST_ASSERT_TRUE(courier->getState() == State::WifiConnecting);
 }
 
 void test_builtin_ws_registered() {
@@ -306,7 +306,7 @@ void test_on_error_callback_registered() {
     });
 
     advanceToConnected();
-    TEST_ASSERT_EQUAL(COURIER_CONNECTED, courier->getState());
+    TEST_ASSERT_TRUE(courier->getState() == State::Connected);
 
     WiFi.setMockStatus(WL_DISCONNECTED);
 
@@ -328,7 +328,7 @@ void test_connection_change_fires_on_setup() {
     });
     courier->setup();
     TEST_ASSERT_EQUAL(1, states.size());
-    TEST_ASSERT_EQUAL(COURIER_WIFI_CONNECTING, states[0]);
+    TEST_ASSERT_TRUE(states[0] == State::WifiConnecting);
 }
 
 void test_connection_change_fires_through_to_connected() {
@@ -338,12 +338,12 @@ void test_connection_change_fires_through_to_connected() {
     });
     advanceToConnected();
 
-    // Should see: WIFI_CONNECTING, WIFI_CONNECTED, TRANSPORTS_CONNECTING, CONNECTED
+    // Should see: WifiConnecting, WifiConnected, TransportsConnecting, Connected
     TEST_ASSERT_TRUE(states.size() >= 4);
-    TEST_ASSERT_EQUAL(COURIER_WIFI_CONNECTING, states[0]);
-    TEST_ASSERT_EQUAL(COURIER_WIFI_CONNECTED, states[1]);
-    TEST_ASSERT_EQUAL(COURIER_TRANSPORTS_CONNECTING, states[2]);
-    TEST_ASSERT_EQUAL(COURIER_CONNECTED, states[3]);
+    TEST_ASSERT_TRUE(states[0] == State::WifiConnecting);
+    TEST_ASSERT_TRUE(states[1] == State::WifiConnected);
+    TEST_ASSERT_TRUE(states[2] == State::TransportsConnecting);
+    TEST_ASSERT_TRUE(states[3] == State::Connected);
 }
 
 void test_dns_config_defaults_to_zero() {

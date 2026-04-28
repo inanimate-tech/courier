@@ -10,18 +10,15 @@
 
 namespace Courier {
 
-// NOTE: Phase 5 will convert this to `enum class State` with PascalCase
-// values. For now the values keep their COURIER_ prefix so existing
-// references stay intact mid-rename.
-enum State {
-  COURIER_BOOTING,
-  COURIER_WIFI_CONNECTING,
-  COURIER_WIFI_CONNECTED,
-  COURIER_WIFI_CONFIGURING,
-  COURIER_TRANSPORTS_CONNECTING,
-  COURIER_CONNECTED,
-  COURIER_RECONNECTING,
-  COURIER_CONNECTION_FAILED
+enum class State {
+  Booting,
+  WifiConnecting,
+  WifiConnected,
+  WifiConfiguring,
+  TransportsConnecting,
+  Connected,
+  Reconnecting,
+  ConnectionFailed,
 };
 
 struct Config {

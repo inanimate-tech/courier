@@ -13,7 +13,7 @@ Client* Client::_instance = nullptr;
 
 Client::Client(const Config& config)
     : _config(config),
-      _state(COURIER_BOOTING),
+      _state(State::Booting),
       _defaultTransport(config.defaultTransport ? config.defaultTransport : "ws"),
       _defaultTopic(config.defaultTopic ? config.defaultTopic : ""),
       _health{},
@@ -69,7 +69,7 @@ void Client::setup()
   _health.lastWiFiCheckMillis = now;
   _reconnect.lastAttemptMillis = now;
 
-  transitionTo(COURIER_WIFI_CONNECTING);
+  transitionTo(State::WifiConnecting);
 }
 
 void Client::loop()
@@ -82,28 +82,28 @@ void Client::loop()
 
   switch (_state)
   {
-  case COURIER_BOOTING:
-    // No-op — waiting for setup() to transition to WIFI_CONNECTING
+  case State::Booting:
+    // No-op — waiting for setup() to transition to WifiConnecting
     break;
-  case COURIER_WIFI_CONNECTING:
+  case State::WifiConnecting:
     handleWifiConnectingState();
     break;
-  case COURIER_WIFI_CONFIGURING:
+  case State::WifiConfiguring:
     handleWifiConfiguringState();
     break;
-  case COURIER_WIFI_CONNECTED:
+  case State::WifiConnected:
     handleWifiConnectedState();
     break;
-  case COURIER_TRANSPORTS_CONNECTING:
+  case State::TransportsConnecting:
     handleTransportsConnectingState();
     break;
-  case COURIER_CONNECTED:
+  case State::Connected:
     handleConnectedState();
     break;
-  case COURIER_RECONNECTING:
+  case State::Reconnecting:
     handleReconnectingState();
     break;
-  case COURIER_CONNECTION_FAILED:
+  case State::ConnectionFailed:
     handleConnectionFailedState();
     break;
   }
@@ -124,7 +124,7 @@ void Client::handleWifiConnectingState()
     if (res)
     {
       Serial.println("[courier] WiFi connected!");
-      transitionTo(COURIER_WIFI_CONNECTED);
+      transitionTo(State::WifiConnected);
     }
     else
     {
@@ -144,7 +144,7 @@ void Client::handleWifiConfiguringState()
   if (!_wm.getConfigPortalActive())
   {
     Serial.println("[courier] Config portal closed. Connecting...");
-    transitionTo(COURIER_WIFI_CONNECTING);
+    transitionTo(State::WifiConnecting);
   }
 }
 
@@ -190,7 +190,7 @@ void Client::handleWifiConnectedState()
   fireWillConnectHooks();
 
   // Transition to TRANSPORTS_CONNECTING
-  transitionTo(COURIER_TRANSPORTS_CONNECTING);
+  transitionTo(State::TransportsConnecting);
   _transportsConnectingStartMillis = millis();
   _transportsBeginCalled = false;
 }
@@ -224,11 +224,11 @@ void Client::handleTransportsConnectingState()
     Serial.println("[courier] No transport connected within 30s - entering reconnection state");
     _reconnect.disconnectedCallbacksFired = true;
     fireDisconnectedCallbacks();
-    transitionTo(COURIER_RECONNECTING);
+    transitionTo(State::Reconnecting);
     return;
   }
 
-  // Transition to CONNECTED when any transport is connected
+  // Transition to Connected when any transport is connected
   if (isConnected())
   {
     Serial.println("[courier] Transport connected - entering CONNECTED state");
@@ -236,7 +236,7 @@ void Client::handleTransportsConnectingState()
     // Fire onTransportsDidConnect hooks
     fireDidConnectHooks();
 
-    transitionTo(COURIER_CONNECTED);
+    transitionTo(State::Connected);
 
     // Fire connected callbacks
     fireConnectedCallbacks();
@@ -274,7 +274,7 @@ void Client::handleConnectedState()
         teardownAllTransports();
         _health.consecutiveWiFiFailures = 0;
         fireDisconnectedCallbacks();
-        transitionTo(COURIER_RECONNECTING);
+        transitionTo(State::Reconnecting);
         return;
       }
     }
@@ -323,7 +323,7 @@ void Client::handleReconnectingState()
                   MAX_RECONNECT_ATTEMPTS);
     fireErrorCallbacks("RECONNECT", "max attempts exceeded");
     _reconnect.attempts = 0;
-    transitionTo(COURIER_CONNECTION_FAILED);
+    transitionTo(State::ConnectionFailed);
     return;
   }
 
@@ -337,7 +337,7 @@ void Client::handleReconnectingState()
   {
     Serial.println("[courier] WiFi lost - resetting to WiFi connection state");
     WiFi.disconnect();
-    transitionTo(COURIER_WIFI_CONNECTING);
+    transitionTo(State::WifiConnecting);
     _timeSyncAttempted = false;
     _reconnect.attempts = 0;
     _reconnect.currentInterval = MIN_RECONNECT_INTERVAL;
@@ -347,7 +347,7 @@ void Client::handleReconnectingState()
   // WiFi is good, retry transports - go back through WIFI_CONNECTED to re-run hooks
   Serial.println("[courier] WiFi OK - transitioning to WIFI_CONNECTED");
   teardownAllTransports();
-  transitionTo(COURIER_WIFI_CONNECTED);
+  transitionTo(State::WifiConnected);
 }
 
 void Client::handleConnectionFailedState()
@@ -372,7 +372,7 @@ void Client::setupWiFi()
 void Client::launchWiFiConfigPortal()
 {
   _wm.startConfigPortal(_apName.c_str());
-  transitionTo(COURIER_WIFI_CONFIGURING);
+  transitionTo(State::WifiConfiguring);
 }
 
 void Client::staticWifiFailedCallback(WiFiManager* wm)
@@ -380,7 +380,7 @@ void Client::staticWifiFailedCallback(WiFiManager* wm)
   if (_instance)
   {
     Serial.println("[courier] WiFi connection failed, launching config portal.");
-    _instance->transitionTo(COURIER_WIFI_CONFIGURING);
+    _instance->transitionTo(State::WifiConfiguring);
   }
 }
 
@@ -736,13 +736,13 @@ void Client::handleTransportFailure(Transport* transport)
     }
   }
 
-  if (_state == COURIER_CONNECTED && allPersistentTransportsFailed()) {
+  if (_state == State::Connected && allPersistentTransportsFailed()) {
     Serial.println("[courier] All persistent transports failed — escalating");
     fireErrorCallbacks("TRANSPORT", "all persistent transports failed");
     _reconnect.disconnectedCallbacksFired = true;
     teardownAllTransports();
     fireDisconnectedCallbacks();
-    transitionTo(COURIER_RECONNECTING);
+    transitionTo(State::Reconnecting);
   }
 }
 
