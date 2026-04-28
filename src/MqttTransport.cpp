@@ -179,13 +179,17 @@ bool MqttTransport::isConnected() const
 
 void MqttTransport::queueIncomingMqttMessage(const char* topic, const char* payload, size_t len)
 {
+    // Push payload first. If the topic push fails after, that one message
+    // gets _onMessage / _clientHook but no _onTopicMessage — bounded loss.
+    // Pushing topic first risks a permanent index-shift if payload then
+    // fails, which is much worse.
+    queueIncomingMessage(payload, len);  // base; silent drop on failure
+
     char* topicCopy = strdup(topic);
     if (!topicCopy) return;
     if (!_topicQueue.push(topicCopy)) {
         free(topicCopy);
-        return;  // bail without enqueuing payload — keep queues paired
     }
-    queueIncomingMessage(payload, len);  // base class enqueues payload
 }
 
 void MqttTransport::loop()
@@ -203,19 +207,8 @@ void MqttTransport::loop()
         } else {
             if (_onBinaryMessage) _onBinaryMessage((const uint8_t*)pmsg.payload, pmsg.length);
         }
-        if (gotTopic && topic) free(topic);
+        if (gotTopic) free(topic);
         free(pmsg.payload);
-    }
-
-    // Drain connection-change and failure flags as base would.
-    if (_connChangePending.load(std::memory_order_acquire)) {
-        bool state = _connChangeState.load(std::memory_order_relaxed);
-        _connChangePending.store(false, std::memory_order_release);
-        if (_onConnection) _onConnection(this, state);
-    }
-    if (_failurePending.load(std::memory_order_acquire)) {
-        _failurePending.store(false, std::memory_order_release);
-        if (_onFailure) _onFailure();
     }
 
     if (_selfHealActive) {
@@ -224,13 +217,10 @@ void MqttTransport::loop()
         } else if (millis() - _disconnectedSinceMillis >= SELF_HEAL_TIMEOUT) {
             _selfHealActive = false;
             queueTransportFailed();
-            // Deliver failure callback immediately.
-            if (_failurePending.load(std::memory_order_acquire)) {
-                _failurePending.store(false, std::memory_order_release);
-                if (_onFailure) _onFailure();
-            }
         }
     }
+
+    drainSignals();
 }
 
 void MqttTransport::suspend()
@@ -285,14 +275,16 @@ void MqttTransport::mqttEventHandler(void* handler_arg,
         // Single-chunk message (fits in library's 1KB buffer)
         if (event->total_data_len == event->data_len && event->current_data_offset == 0) {
             self->freeReassemblyBuf();
-            // Stack-allocated topic copy for the single-chunk fast path.
-            // Topic is not NUL-terminated in the IDF event.
-            char topicBuf[128];
-            size_t topicLen = (size_t)event->topic_len < sizeof(topicBuf) - 1
-                                ? (size_t)event->topic_len : sizeof(topicBuf) - 1;
-            memcpy(topicBuf, event->topic, topicLen);
-            topicBuf[topicLen] = '\0';
-            self->queueIncomingMqttMessage(topicBuf, event->data, event->data_len);
+            // Heap-allocate the topic to avoid silent truncation of topics
+            // longer than a fixed stack buffer. Topic is not NUL-terminated
+            // in the IDF event. queueIncomingMqttMessage strdups internally,
+            // so the local copy can be freed immediately after.
+            char* topicCopy = (char*)malloc(event->topic_len + 1);
+            if (!topicCopy) break;
+            memcpy(topicCopy, event->topic, event->topic_len);
+            topicCopy[event->topic_len] = '\0';
+            self->queueIncomingMqttMessage(topicCopy, event->data, event->data_len);
+            free(topicCopy);
             break;
         }
 

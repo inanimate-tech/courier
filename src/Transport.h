@@ -95,6 +95,25 @@ protected:
         _failurePending.store(true, std::memory_order_release);
     }
 
+    // Drain pending connection-state changes and failure flags. Subclasses
+    // that override drainPending() should call this at the end so they
+    // don't have to copy the dispatch logic.
+    void drainSignals() {
+        if (_connChangePending.load(std::memory_order_acquire)) {
+            bool state = _connChangeState.load(std::memory_order_relaxed);
+            _connChangePending.store(false, std::memory_order_release);
+            if (_onConnection) _onConnection(this, state);
+        }
+        if (_failurePending.load(std::memory_order_acquire)) {
+            _failurePending.store(false, std::memory_order_release);
+            if (_onFailure) _onFailure();
+        }
+    }
+
+    // Default drain — pops messages and dispatches via _onMessage /
+    // _onBinaryMessage / _clientHook, then drains signals. Subclasses
+    // that need different per-message dispatch (e.g. MqttTransport with
+    // topic-aware delivery) override this and call drainSignals().
     void drainPending() {
         PendingMessage msg;
         while (_pending.pop(msg)) {
@@ -106,15 +125,7 @@ protected:
             }
             free(msg.payload);
         }
-        if (_connChangePending.load(std::memory_order_acquire)) {
-            bool state = _connChangeState.load(std::memory_order_relaxed);
-            _connChangePending.store(false, std::memory_order_release);
-            if (_onConnection) _onConnection(this, state);
-        }
-        if (_failurePending.load(std::memory_order_acquire)) {
-            _failurePending.store(false, std::memory_order_release);
-            if (_onFailure) _onFailure();
-        }
+        drainSignals();
     }
 };
 
