@@ -90,11 +90,11 @@ When you ship firmware built with Courier, those libraries ship with it. Follow 
 ```ini
 lib_deps = https://github.com/inanimate-tech/courier.git
 ```
-Or to pin a version: `https://github.com/inanimate-tech/courier.git#v0.3.1`
+Or to pin a version: `https://github.com/inanimate-tech/courier.git#v0.3.2`
 
 **From the PlatformIO registry** (for stable versions):
 ```ini
-lib_deps = inanimate/courier@0.3.1
+lib_deps = inanimate/courier@^0.3.2
 ```
 
 ### ESP-IDF Component
@@ -105,13 +105,13 @@ dependencies:
   inanimate-tech/courier:
     git: https://github.com/inanimate-tech/courier.git
 ```
-Or to pin a version, add `version: v0.3.1`
+Or to pin a version, add `version: v0.3.2`
 
 **From the ESP Component Registry** (for stable versions):
 ```yml
 dependencies:
   inanimate-tech/courier:
-    version: "0.2.0"
+    version: "^0.3.2"
 ```
 
 ## API
