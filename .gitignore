@@ -21,3 +21,13 @@ examples/**/CMakeLists.txt
 !examples/espidf-basic/main/CMakeLists.txt
 # Per-example clangd index caches.
 **/.cache/
+
+# Per-developer Claude Code artifacts (not for shared tree)
+.claude/settings.local.json
+.claude/napkin.md
+.claude/memory/
+.claude/projects/
+
+# Superpowers plan/spec output — kept out of the repo to avoid leaking
+# personal context, in-progress thinking, and absolute paths.
+docs/superpowers/

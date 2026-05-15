@@ -67,3 +67,12 @@ WiFi health monitoring checks status every 5s. Transport self-healing: WS and MQ
 - `onConfigure()` hooks are per-transport-specific (`WebSocketTransport`, `MqttTransport`) and expose raw ESP-IDF config structs for advanced customization.
 - `suspend()`/`resume()` exist for OTA updates (frees task stacks).
 - Time sync: NTP primary (continuous drift correction via ezTime) + HTTP Date header fallback for cold boot.
+
+## Repo hygiene
+
+This is a public open-source repo. A few things to keep out of tracked files:
+
+- Absolute home paths (`/Users/...`, `/home/...`). Use relative paths or `<repo-root>` placeholders.
+- Per-developer Claude Code artefacts (`.claude/settings.local.json`, `.claude/napkin.md`, `.claude/memory/`, `.claude/projects/`) — all `.gitignore`-d.
+- Working files from plan/spec skills (Superpowers `writing-plans`, `writing-skills`, etc.). Save them outside the repo, not under `docs/superpowers/`. That path is `.gitignore`-d as a safety net.
+- Personal account identifiers in URLs and example configs. For Cloudflare Worker hostnames, use a `YOUR-CF-ACCOUNT` placeholder.
