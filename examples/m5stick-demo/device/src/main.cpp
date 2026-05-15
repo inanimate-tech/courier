@@ -4,7 +4,7 @@
 Courier::Config makeConfig()
 {
   Courier::Config cfg;
-  cfg.host = "m5stick-demo.genmon.workers.dev";
+  cfg.host = "m5stick-demo.YOUR-CF-ACCOUNT.workers.dev";
   cfg.port = 443;
   cfg.path = "/agents/device-agent/m5stick-demo";
   cfg.apName = "M5Stick Demo";

@@ -1,6 +1,6 @@
 {
   "name": "courier",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Batteries-included JSON messaging for ESP32 — WiFi, WebSocket, MQTT, UDP multicast, self-healing reconnection, all handled",
   "keywords": "esp32, websocket, mqtt, udp, wifi, connectivity, iot, reconnection",
   "repository": {
@@ -20,5 +20,15 @@
     "tzapu/WiFiManager": "^2.0.17",
     "bblanchon/ArduinoJson": "^7.4.2",
     "ropg/ezTime": "^0.8.3"
+  },
+  "export": {
+    "include": [
+      "src/**/*",
+      "CMakeLists.txt",
+      "idf_component.yml",
+      "library.json",
+      "LICENSE",
+      "README.md"
+    ]
   }
 }

@@ -83,5 +83,5 @@ Then update `cfg.host` in `device/src/main.cpp` to your deployed Worker's hostna
 ```bash
 curl -X POST -H "Content-Type: text/plain" \
   --data "hello from the command line" \
-  https://m5stick-demo.YOUR-WORKER.workers.dev/agents/device-agent/m5stick-demo
+  https://m5stick-demo.YOUR-CF-ACCOUNT.workers.dev/agents/device-agent/m5stick-demo
 ```
