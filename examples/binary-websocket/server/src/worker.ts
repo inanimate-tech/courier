@@ -17,14 +17,18 @@ export class AudioRelay implements DurableObject {
     const server = pair[1];
 
     this.ctx.acceptWebSocket(server);
-    // Role survives hibernation — used to pick broadcast targets.
+    // Role survives hibernation — used to pick broadcast/notify targets.
     server.serializeAttachment({ role });
+
+    // Refresh device-presence for monitors: covers a device joining and a fresh
+    // monitor that needs the current state right away.
+    this.notifyPresence();
 
     return new Response(null, { status: 101, webSocket: client });
   }
 
   async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void> {
-    // This demo only relays binary audio; ignore any text.
+    // Audio is binary; ignore any text a client might send.
     if (typeof message === "string") return;
     // getWebSockets() includes the sending device socket; the role filter skips it.
     for (const sock of this.ctx.getWebSockets()) {
@@ -40,10 +44,40 @@ export class AudioRelay implements DurableObject {
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+    const att = ws.deserializeAttachment() as { role?: string } | null;
     try {
       ws.close(code, reason);
     } catch {
       /* already closed */
+    }
+    // A device dropping changes presence. Exclude this socket — it may still be
+    // listed by getWebSockets() while closing.
+    if (att && att.role === "device") this.notifyPresence(ws);
+  }
+
+  // Tell every monitor whether a device is currently connected.
+  private notifyPresence(exclude?: WebSocket): void {
+    const sockets = this.ctx.getWebSockets();
+    let deviceConnected = false;
+    for (const sock of sockets) {
+      if (sock === exclude) continue;
+      const att = sock.deserializeAttachment() as { role?: string } | null;
+      if (att && att.role === "device") {
+        deviceConnected = true;
+        break;
+      }
+    }
+    const msg = JSON.stringify({ type: "presence", deviceConnected });
+    for (const sock of sockets) {
+      if (sock === exclude) continue;
+      const att = sock.deserializeAttachment() as { role?: string } | null;
+      if (att && att.role === "monitor") {
+        try {
+          sock.send(msg);
+        } catch {
+          /* viewer went away; drop */
+        }
+      }
     }
   }
 }
@@ -107,16 +141,19 @@ const PAGE = `<!doctype html>
   var mags = new Float32Array(NUM_BARS);  // latest computed (0..1)
   var bars = new Float32Array(NUM_BARS);  // smoothed for display
 
-  // Log-spaced bin ranges over [1, N/2). At the low end several bars can map to
-  // the same single FFT bin, so the leftmost few move in lockstep — expected,
-  // not a bug (sub-bin resolution would need a longer FFT).
-  var ranges = [], half = N / 2, minBin = 1, maxBin = half;
+  // Bar -> FFT bin ranges. Logarithmic, but kept CONTIGUOUS and strictly
+  // increasing (each bar at least one bin wide). Without the "strictly
+  // increasing" rule, log spacing collapses several low bars onto the same bin
+  // (bin 1, then bin 2, ...) so the leftmost bars move in lockstep. Here low
+  // bars step through individual bins; higher bars cover progressively wider
+  // ranges as the log curve overtakes the +1 floor.
+  var ranges = [], half = N / 2, minBin = 1, maxBin = half, prev = minBin;
   for (var b = 0; b < NUM_BARS; b++) {
-    var lo = Math.floor(minBin * Math.pow(maxBin / minBin, b / NUM_BARS));
-    var hi = Math.floor(minBin * Math.pow(maxBin / minBin, (b + 1) / NUM_BARS));
-    if (hi <= lo) hi = lo + 1;
+    var hi = Math.round(minBin * Math.pow(maxBin / minBin, (b + 1) / NUM_BARS));
+    if (hi <= prev) hi = prev + 1;
     if (hi > half) hi = half;
-    ranges.push([lo, hi]);
+    ranges.push([prev, hi]);
+    prev = hi;
   }
 
   // In-place iterative radix-2 FFT.
@@ -197,14 +234,22 @@ const PAGE = `<!doctype html>
     var proto = location.protocol === "https:" ? "wss:" : "ws:";
     var ws = new WebSocket(proto + "//" + location.host + "/ws?monitor=1");
     ws.binaryType = "arraybuffer";
-    ws.onopen = function () { statusEl.textContent = "connected - waiting for stream..."; };
+    ws.onopen = function () { statusEl.textContent = "no device connected"; };
     ws.onmessage = function (ev) {
-      if (typeof ev.data === "string") return;
-      statusEl.textContent = "streaming";
+      if (typeof ev.data === "string") {
+        // Control messages from the relay (device presence). Audio is binary.
+        try {
+          var msg = JSON.parse(ev.data);
+          if (msg && msg.type === "presence") {
+            statusEl.textContent = msg.deviceConnected ? "connected" : "no device connected";
+          }
+        } catch (e) { /* ignore non-JSON text */ }
+        return;
+      }
       onFrame(ev.data);
     };
     ws.onclose = function () {
-      statusEl.textContent = "disconnected - retrying...";
+      statusEl.textContent = "disconnected from server - retrying...";
       setTimeout(connect, 1000);
     };
     ws.onerror = function () { try { ws.close(); } catch (e) {} };
