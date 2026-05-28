@@ -20,7 +20,7 @@ static Courier::Client courier(makeConfig());
 
 // ---- Audio capture config ----
 static constexpr uint32_t SAMPLE_RATE   = 16000;  // M5.Mic default
-static constexpr size_t   FRAME_SAMPLES = 512;    // int16 samples per binary frame
+static constexpr size_t   FRAME_SAMPLES = 512;    // PCM samples per WebSocket frame
 static constexpr size_t   RING_SLOTS    = 4;      // ring of capture buffers
 
 static int16_t audioRing[RING_SLOTS][FRAME_SAMPLES];
@@ -94,7 +94,10 @@ void setup()
   });
 
   courier.onDisconnected([]() {
-    if (streaming) stopStreaming();
+    if (streaming) {
+      streaming = false;
+      M5.Mic.end();
+    }
     serverReady = false;
     showStatus("Reconnecting...");
   });
