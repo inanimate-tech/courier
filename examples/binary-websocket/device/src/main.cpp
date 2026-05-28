@@ -63,9 +63,6 @@ static void showLive()
 
 static void startStreaming()
 {
-  // Mic and speaker share the codec on the S3 — release the speaker first.
-  M5.Speaker.end();
-  M5.Mic.begin();
   recIdx  = 2;
   sendIdx = 0;
   streaming = true;
@@ -75,7 +72,6 @@ static void startStreaming()
 static void stopStreaming()
 {
   streaming = false;
-  M5.Mic.end();
   showIdle();
 }
 
@@ -88,16 +84,19 @@ void setup()
   M5.Display.setRotation(1);
   showStatus("Connecting...");
 
+  // S3: mic and speaker share the ES8311 codec / I2S port. Begin the mic once
+  // here — M5.Mic.begin() releases the speaker's I2S driver internally. We keep
+  // it running and gate sending with `streaming`. (Toggling begin/end on every
+  // button press logged repeated "I2S port 0 has not installed" errors.)
+  M5.Mic.begin();
+
   courier.onConnected([]() {
     serverReady = true;
     if (!streaming) showIdle();
   });
 
   courier.onDisconnected([]() {
-    if (streaming) {
-      streaming = false;
-      M5.Mic.end();
-    }
+    streaming = false;
     serverReady = false;
     showStatus("Reconnecting...");
   });
