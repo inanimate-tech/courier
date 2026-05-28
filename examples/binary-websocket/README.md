@@ -10,6 +10,8 @@ Worker backed by a single Durable Object built on the Cloudflare
 [Agents SDK](https://developers.cloudflare.com/agents/), which handles the
 WebSocket lifecycle (including hibernation).
 
+![The web page showing a live FFT frequency-bar visualiser of the streamed mic audio](screenshot.png)
+
 ## Structure
 
 ```
