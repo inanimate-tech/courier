@@ -7,14 +7,14 @@
   "durable_objects": {
     "bindings": [
       {
-        "class_name": "AudioRelay",
-        "name": "AudioRelay"
+        "class_name": "AudioReceiver",
+        "name": "AudioReceiver"
       }
     ]
   },
   "migrations": [
     {
-      "new_sqlite_classes": ["AudioRelay"],
+      "new_sqlite_classes": ["AudioReceiver"],
       "tag": "v1"
     }
   ],
