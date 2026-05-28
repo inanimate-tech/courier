@@ -1,82 +1,65 @@
-// Binary WebSocket relay: one fixed Durable Object instance fans binary audio
-// frames from the device out to every browser viewer. No agents SDK; the DO is
-// hand-rolled on the WebSocket Hibernation API.
+// Binary WebSocket relay built on the Cloudflare Agents SDK. A single fixed
+// agent instance fans binary audio frames from the device out to every browser
+// viewer. The SDK owns the WebSocket lifecycle (including hibernation); we just
+// tag connections by role, suppress the SDK's own protocol frames (our clients
+// are plain WebSocket, not Agents clients), and broadcast.
 
-export class AudioRelay implements DurableObject {
-  constructor(private ctx: DurableObjectState, private env: Env) {}
+import { Agent, getAgentByName } from "agents";
+import type { Connection, ConnectionContext } from "agents";
 
-  async fetch(request: Request): Promise<Response> {
-    if (request.headers.get("Upgrade") !== "websocket") {
-      return new Response("expected websocket", { status: 426 });
-    }
-    const url = new URL(request.url);
-    const role = url.searchParams.get("monitor") === "1" ? "monitor" : "device";
-
-    const pair = new WebSocketPair();
-    const client = pair[0];
-    const server = pair[1];
-
-    this.ctx.acceptWebSocket(server);
-    // Role survives hibernation — used to pick broadcast/notify targets.
-    server.serializeAttachment({ role });
-
-    // Refresh device-presence for monitors: covers a device joining and a fresh
-    // monitor that needs the current state right away.
-    this.notifyPresence();
-
-    return new Response(null, { status: 101, webSocket: client });
+export class AudioRelay extends Agent<Env> {
+  // Browsers connect with ?monitor=1 (viewers); everything else is the device
+  // (the audio producer). getConnections(tag) then filters by these.
+  getConnectionTags(_connection: Connection, ctx: ConnectionContext): string[] {
+    const url = new URL(ctx.request.url);
+    return [url.searchParams.get("monitor") === "1" ? "monitor" : "device"];
   }
 
-  async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void> {
+  // Our clients (the Courier device and the vanilla browser page) don't speak
+  // the Agents protocol, so suppress the CF_AGENT_* identity/state frames the
+  // SDK would otherwise push — to a plain client they're just junk text.
+  shouldSendProtocolMessages(): boolean {
+    return false;
+  }
+
+  onConnect(): void {
+    // A device joining, or a fresh monitor, both need current presence state.
+    this.notifyPresence();
+  }
+
+  onMessage(_connection: Connection, message: string | ArrayBuffer): void {
     // Audio is binary; ignore any text a client might send.
     if (typeof message === "string") return;
-    // getWebSockets() includes the sending device socket; the role filter skips it.
-    for (const sock of this.ctx.getWebSockets()) {
-      const att = sock.deserializeAttachment() as { role?: string } | null;
-      if (att && att.role === "monitor") {
-        try {
-          sock.send(message);
-        } catch {
-          /* viewer went away mid-send; drop */
-        }
+    for (const monitor of this.getConnections("monitor")) {
+      try {
+        monitor.send(message);
+      } catch {
+        /* viewer went away mid-send; drop */
       }
     }
   }
 
-  async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
-    const att = ws.deserializeAttachment() as { role?: string } | null;
-    try {
-      ws.close(code, reason);
-    } catch {
-      /* already closed */
-    }
-    // A device dropping changes presence. Exclude this socket — it may still be
-    // listed by getWebSockets() while closing.
-    if (att && att.role === "device") this.notifyPresence(ws);
+  onClose(connection: Connection): void {
+    // A device dropping changes presence. Exclude the closing connection — it
+    // may still be listed by getConnections() while closing.
+    this.notifyPresence(connection.id);
   }
 
   // Tell every monitor whether a device is currently connected.
-  private notifyPresence(exclude?: WebSocket): void {
-    const sockets = this.ctx.getWebSockets();
+  private notifyPresence(excludeId?: string): void {
     let deviceConnected = false;
-    for (const sock of sockets) {
-      if (sock === exclude) continue;
-      const att = sock.deserializeAttachment() as { role?: string } | null;
-      if (att && att.role === "device") {
-        deviceConnected = true;
-        break;
-      }
+    for (const device of this.getConnections("device")) {
+      if (device.id === excludeId) continue;
+      deviceConnected = true;
+      break;
     }
     const msg = JSON.stringify({ type: "presence", deviceConnected });
-    for (const sock of sockets) {
-      if (sock === exclude) continue;
-      const att = sock.deserializeAttachment() as { role?: string } | null;
-      if (att && att.role === "monitor") {
-        try {
-          sock.send(msg);
-        } catch {
-          /* viewer went away; drop */
-        }
+    for (const monitor of this.getConnections("monitor")) {
+      if (monitor.id === excludeId) continue;
+      try {
+        monitor.send(msg);
+      } catch {
+        /* drop */
       }
     }
   }
@@ -87,8 +70,10 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/ws") {
-      const id = env.AudioRelay.idFromName("audio"); // single fixed instance
-      return env.AudioRelay.get(id).fetch(request);
+      // Route the fixed path to one fixed agent instance, so the device's
+      // cfg.path = "/ws" (and the browser's /ws?monitor=1) stay unchanged.
+      const relay = await getAgentByName(env.AudioRelay, "main");
+      return relay.fetch(request);
     }
 
     if (url.pathname === "/" || url.pathname === "") {

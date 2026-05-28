@@ -3,6 +3,7 @@
   "name": "binary-websocket",
   "main": "src/worker.ts",
   "compatibility_date": "2026-03-02",
+  "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
     "bindings": [
       {

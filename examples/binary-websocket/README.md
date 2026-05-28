@@ -6,7 +6,9 @@ exercises Courier's binary *send* path (`WebSocketTransport::sendBinary`).
 
 The device connects via WebSocket managed by
 [Courier](https://github.com/inanimate-tech/courier). The server is a Cloudflare
-Worker backed by a single hand-rolled Durable Object (no `agents` SDK).
+Worker backed by a single Durable Object built on the Cloudflare
+[Agents SDK](https://developers.cloudflare.com/agents/), which handles the
+WebSocket lifecycle (including hibernation).
 
 ## Structure
 
@@ -54,13 +56,20 @@ Press again to stop and return to the green screen.
 
 ## Server
 
-A buildless Cloudflare Worker: one `worker.ts` containing the Durable Object,
+A buildless Cloudflare Worker: one `worker.ts` containing the `AudioRelay`
+agent (an `Agent` subclass from the [Agents SDK](https://developers.cloudflare.com/agents/)),
 the routing, and the inline visualiser page. No React, no bundler.
 
 - `GET /` serves the visualiser page.
-- `GET /ws` upgrades to a WebSocket on the single fixed Durable Object instance.
-  The device connects here; the browser connects to `/ws?monitor=1`. The DO
-  broadcasts each binary frame from the device to every viewer.
+- `GET /ws` upgrades to a WebSocket on a single fixed agent instance. The device
+  connects here; the browser connects to `/ws?monitor=1`. The agent tags each
+  connection by role and broadcasts each binary frame from the device to every
+  viewer, and pushes a small `{type:"presence"}` message so the page can show
+  whether a device is connected.
+
+Because the device and the browser are plain WebSocket clients (not Agents SDK
+clients), the agent overrides `shouldSendProtocolMessages()` to return `false` —
+otherwise the SDK's `CF_AGENT_*` state frames would arrive as junk text.
 
 ### Develop
 
