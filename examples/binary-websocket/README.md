@@ -44,13 +44,13 @@ creates an access point called **Binary WS Demo** — connect to it from your
 phone and enter your Wi-Fi credentials via the captive portal (ESP32 does not
 support 5 GHz networks).
 
-The screen shows `Connecting...`, then a **green** "Push button to stream"
-once connected.
+The screen shows `Connecting...`, then a **green** "Press button to start
+stream" once connected.
 
 ### Stream
 
 Press the front button (`BtnA`) to start streaming: the screen turns **red**
-and shows **LIVE** with "Push button to stop". The mic is captured as mono
+and shows **LIVE** with "Press button to stop". The mic is captured as mono
 16-bit PCM at 16 kHz and sent in 512-sample binary frames (~31 frames/sec).
 Press again to stop and return to the green screen.
 

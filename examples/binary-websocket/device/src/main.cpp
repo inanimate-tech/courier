@@ -46,7 +46,7 @@ static void showIdle()
   M5.Display.setTextColor(BLACK, GREEN);
   M5.Display.setTextSize(2);
   M5.Display.setCursor(4, 4);
-  M5.Display.print("Push button\nto stream");
+  M5.Display.print("Press button\nto start stream");
 }
 
 static void showLive()
@@ -56,9 +56,9 @@ static void showLive()
   M5.Display.setTextSize(3);
   M5.Display.setCursor(6, 10);
   M5.Display.print("LIVE");
-  M5.Display.setTextSize(1);
-  M5.Display.setCursor(6, 48);
-  M5.Display.print("Push button to stop");
+  M5.Display.setTextSize(2);  // CTA matches the green screen's size
+  M5.Display.setCursor(4, 48);
+  M5.Display.print("Press button\nto stop");
 }
 
 static void startStreaming()
