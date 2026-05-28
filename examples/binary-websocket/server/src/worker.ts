@@ -26,6 +26,7 @@ export class AudioRelay implements DurableObject {
   async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void> {
     // This demo only relays binary audio; ignore any text.
     if (typeof message === "string") return;
+    // getWebSockets() includes the sending device socket; the role filter skips it.
     for (const sock of this.ctx.getWebSockets()) {
       const att = sock.deserializeAttachment() as { role?: string } | null;
       if (att && att.role === "monitor") {
@@ -106,7 +107,9 @@ const PAGE = `<!doctype html>
   var mags = new Float32Array(NUM_BARS);  // latest computed (0..1)
   var bars = new Float32Array(NUM_BARS);  // smoothed for display
 
-  // Log-spaced bin ranges over [1, N/2)
+  // Log-spaced bin ranges over [1, N/2). At the low end several bars can map to
+  // the same single FFT bin, so the leftmost few move in lockstep — expected,
+  // not a bug (sub-bin resolution would need a longer FFT).
   var ranges = [], half = N / 2, minBin = 1, maxBin = half;
   for (var b = 0; b < NUM_BARS; b++) {
     var lo = Math.floor(minBin * Math.pow(maxBin / minBin, b / NUM_BARS));
