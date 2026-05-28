@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "binary-websocket",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-03-02",
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "AudioRelay",
+        "name": "AudioRelay"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "new_sqlite_classes": ["AudioRelay"],
+      "tag": "v1"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}
