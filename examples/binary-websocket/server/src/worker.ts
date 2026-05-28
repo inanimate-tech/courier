@@ -1,78 +1,40 @@
-// Binary WebSocket relay built on the Cloudflare Agents SDK. A single fixed
+// Binary WebSocket receiver built on the Cloudflare Agents SDK. A single fixed
 // agent instance fans binary audio frames from the device out to every browser
-// viewer. The SDK owns the WebSocket lifecycle (including hibernation); we just
-// tag connections by role, suppress the SDK's own protocol frames (our clients
-// are plain WebSocket, not Agents clients), and broadcast.
+// viewer. The browser shows a live FFT visualization.
 
 import { Agent, getAgentByName } from "agents";
 import type { Connection, ConnectionContext } from "agents";
 
-export class AudioRelay extends Agent<Env> {
-  // Browsers connect with ?monitor=1 (viewers); everything else is the device
-  // (the audio producer). getConnections(tag) then filters by these.
+export class AudioReceiver extends Agent<Env> {
+  // Browsers connect with ?monitor=1 (viewers); everything else is the device.
   getConnectionTags(_connection: Connection, ctx: ConnectionContext): string[] {
     const url = new URL(ctx.request.url);
     return [url.searchParams.get("monitor") === "1" ? "monitor" : "device"];
   }
 
   // Our clients (the Courier device and the vanilla browser page) don't speak
-  // the Agents protocol, so suppress the CF_AGENT_* identity/state frames the
-  // SDK would otherwise push — to a plain client they're just junk text.
+  // the Agents protocol, so suppress the CF_AGENT_* identity/state frames.
   shouldSendProtocolMessages(): boolean {
     return false;
   }
 
-  onConnect(): void {
-    // A device joining, or a fresh monitor, both need current presence state.
-    this.notifyPresence();
-  }
-
   onMessage(_connection: Connection, message: string | ArrayBuffer): void {
-    // Audio is binary; ignore any text a client might send.
+    // Audio is binary; relay each frame to viewers only (never back to a device).
     if (typeof message === "string") return;
     for (const monitor of this.getConnections("monitor")) {
-      try {
-        monitor.send(message);
-      } catch {
-        /* viewer went away mid-send; drop */
-      }
-    }
-  }
-
-  onClose(connection: Connection): void {
-    // A device dropping changes presence. Exclude the closing connection — it
-    // may still be listed by getConnections() while closing.
-    this.notifyPresence(connection.id);
-  }
-
-  // Tell every monitor whether a device is currently connected.
-  private notifyPresence(excludeId?: string): void {
-    let deviceConnected = false;
-    for (const device of this.getConnections("device")) {
-      if (device.id === excludeId) continue;
-      deviceConnected = true;
-      break;
-    }
-    const msg = JSON.stringify({ type: "presence", deviceConnected });
-    for (const monitor of this.getConnections("monitor")) {
-      if (monitor.id === excludeId) continue;
-      try {
-        monitor.send(msg);
-      } catch {
-        /* drop */
-      }
+      monitor.send(message);
     }
   }
 }
 
+// worker entrypoint
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/ws") {
-      // Route the fixed path to one fixed agent instance, so the device's
-      // cfg.path = "/ws" (and the browser's /ws?monitor=1) stay unchanged.
-      const relay = await getAgentByName(env.AudioRelay, "main");
+      // Route the fixed path to one fixed agent instance
+      const relay = await getAgentByName(env.AudioReceiver, "main");
       return relay.fetch(request);
     }
 
@@ -91,7 +53,7 @@ const PAGE = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Binary WebSocket - live audio FFT</title>
+<title>Live audio FFT via binary websocket</title>
 <style>
   :root { color-scheme: dark; }
   body { margin:0; background:#0b0b10; color:#e6e6f0;
@@ -106,7 +68,7 @@ const PAGE = `<!doctype html>
 </head>
 <body>
 <header>
-  <h1>Binary WebSocket - live audio FFT</h1>
+  <h1>Live audio FFT via binary websocket</h1>
   <div id="status">connecting...</div>
 </header>
 <div id="wrap"><canvas id="c"></canvas></div>
@@ -219,22 +181,13 @@ const PAGE = `<!doctype html>
     var proto = location.protocol === "https:" ? "wss:" : "ws:";
     var ws = new WebSocket(proto + "//" + location.host + "/ws?monitor=1");
     ws.binaryType = "arraybuffer";
-    ws.onopen = function () { statusEl.textContent = "no device connected"; };
+    ws.onopen = function () { statusEl.textContent = "connected"; };
     ws.onmessage = function (ev) {
-      if (typeof ev.data === "string") {
-        // Control messages from the relay (device presence). Audio is binary.
-        try {
-          var msg = JSON.parse(ev.data);
-          if (msg && msg.type === "presence") {
-            statusEl.textContent = msg.deviceConnected ? "connected" : "no device connected";
-          }
-        } catch (e) { /* ignore non-JSON text */ }
-        return;
-      }
+      if (typeof ev.data === "string") return;  // audio is binary
       onFrame(ev.data);
     };
     ws.onclose = function () {
-      statusEl.textContent = "disconnected from server - retrying...";
+      statusEl.textContent = "disconnected - reconnecting...";
       setTimeout(connect, 1000);
     };
     ws.onerror = function () { try { ws.close(); } catch (e) {} };

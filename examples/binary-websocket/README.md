@@ -1,4 +1,4 @@
-# Binary WebSocket
+# Binary WebSocket Demo
 
 An M5Stick streams its microphone to a Cloudflare Worker as **binary** WebSocket
 frames; a web page renders a live FFT frequency-bar visualiser. This example
@@ -37,16 +37,6 @@ First [install the PlatformIO CLI](https://docs.platformio.org/en/stable/core/in
 Before flashing, edit `device/src/main.cpp` and set `cfg.host` to your deployed
 Worker's hostname.
 
-### Connect to Wi-Fi
-
-The device manages its own connectivity. If it can't join a known network it
-creates an access point called **Binary WS Demo** — connect to it from your
-phone and enter your Wi-Fi credentials via the captive portal (ESP32 does not
-support 5 GHz networks).
-
-The screen shows `Connecting...`, then a **green** "Press button to start
-stream" once connected.
-
 ### Stream
 
 Press the front button (`BtnA`) to start streaming: the screen turns **red**
@@ -56,20 +46,13 @@ Press again to stop and return to the green screen.
 
 ## Server
 
-A buildless Cloudflare Worker: one `worker.ts` containing the `AudioRelay`
-agent (an `Agent` subclass from the [Agents SDK](https://developers.cloudflare.com/agents/)),
-the routing, and the inline visualiser page. No React, no bundler.
+A Cloudflare Worker: one `worker.ts` containing the `AudioReceiver` agent
+(agent, an `Agent` subclass from the [Agents SDK](https://developers.cloudflare.com/agents/)),
+the routing, and the inline visualiser page.
 
 - `GET /` serves the visualiser page.
 - `GET /ws` upgrades to a WebSocket on a single fixed agent instance. The device
-  connects here; the browser connects to `/ws?monitor=1`. The agent tags each
-  connection by role and broadcasts each binary frame from the device to every
-  viewer, and pushes a small `{type:"presence"}` message so the page can show
-  whether a device is connected.
-
-Because the device and the browser are plain WebSocket clients (not Agents SDK
-clients), the agent overrides `shouldSendProtocolMessages()` to return `false` —
-otherwise the SDK's `CF_AGENT_*` state frames would arrive as junk text.
+  connects here; the browser connects to `/ws?monitor=1`.
 
 ### Develop
 
