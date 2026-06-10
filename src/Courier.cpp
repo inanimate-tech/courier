@@ -443,8 +443,15 @@ void Client::dispatchJSON(const char* transportName, const char* payload, size_t
 {
   if (!_messageCallback) return;
   JsonDocument doc;
-  if (auto err = deserializeJson(doc, payload, length)) {
-    // Not JSON — silently drop. Per-transport hooks still saw the raw bytes.
+  // The payload is a heap-owned scratch buffer freed right after this returns
+  // (see Transport::drainPending contract), and the raw per-transport hook has
+  // already run. Parsing it as mutable char* puts ArduinoJson in zero-copy
+  // mode — strings in `doc` point into the buffer instead of being duplicated,
+  // halving the peak footprint of large payloads (matters on no-PSRAM boards).
+  if (auto err = deserializeJson(doc, const_cast<char*>(payload), length)) {
+    // Not JSON — drop. Per-transport hooks still saw the raw bytes.
+    Serial.printf("[courier] %s: dropping non-JSON payload (%u bytes): %s\n",
+                  transportName, (unsigned)length, err.c_str());
     return;
   }
   const char* mtype = doc["type"] | "";

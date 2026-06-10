@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -13,6 +14,16 @@
 
 #include "SpscQueue.h"
 #include "Endpoint.h"
+
+// Incoming-path failures (allocation, queue overflow) drop the message; log
+// them so oversized or bursty traffic doesn't vanish without a trace.
+#ifdef ESP_PLATFORM
+#include "esp_log.h"
+#define COURIER_TRANSPORT_LOGW(fmt, ...) ESP_LOGW("courier", fmt, ##__VA_ARGS__)
+#else
+#define COURIER_TRANSPORT_LOGW(fmt, ...) \
+    fprintf(stderr, "[courier] " fmt "\n", ##__VA_ARGS__)
+#endif
 
 namespace Courier {
 
@@ -105,17 +116,44 @@ protected:
 
     void queueIncomingMessage(const char* payload, size_t len) {
         char* buf = (char*)malloc(len + 1);
-        if (!buf) return;
+        if (!buf) {
+            COURIER_TRANSPORT_LOGW("rx alloc failed (%u bytes), message dropped",
+                                   (unsigned)len);
+            return;
+        }
         memcpy(buf, payload, len);
         buf[len] = '\0';
-        if (!_pending.push(PendingMessage{buf, len, false})) free(buf);
+        queueIncomingMessageOwned(buf, len);
+    }
+
+    // Zero-copy variant: takes ownership of a heap buffer (malloc /
+    // heap_caps_malloc) that already holds the payload with a NUL at
+    // buf[len]. Freed by drainPending after dispatch, or here on overflow.
+    void queueIncomingMessageOwned(char* buf, size_t len) {
+        if (!_pending.push(PendingMessage{buf, len, false})) {
+            COURIER_TRANSPORT_LOGW("rx queue full, message dropped (%u bytes)",
+                                   (unsigned)len);
+            free(buf);
+        }
     }
 
     void queueIncomingBinary(const uint8_t* data, size_t len) {
         uint8_t* buf = (uint8_t*)malloc(len);
-        if (!buf) return;
+        if (!buf) {
+            COURIER_TRANSPORT_LOGW("rx alloc failed (%u bytes), binary dropped",
+                                   (unsigned)len);
+            return;
+        }
         memcpy(buf, data, len);
-        if (!_pending.push(PendingMessage{buf, len, true})) free(buf);
+        queueIncomingBinaryOwned(buf, len);
+    }
+
+    void queueIncomingBinaryOwned(uint8_t* buf, size_t len) {
+        if (!_pending.push(PendingMessage{buf, len, true})) {
+            COURIER_TRANSPORT_LOGW("rx queue full, binary dropped (%u bytes)",
+                                   (unsigned)len);
+            free(buf);
+        }
     }
 
     void queueConnectionChange(bool connected) {
@@ -146,6 +184,12 @@ protected:
     // _onBinaryMessage / _clientHook, then drains signals. Subclasses
     // that need different per-message dispatch (e.g. MqttTransport with
     // topic-aware delivery) override this and call drainSignals().
+    //
+    // Contract: every payload handed to the hooks is a heap-owned,
+    // NUL-terminated scratch buffer freed immediately after dispatch.
+    // _clientHook runs LAST and is allowed to mutate the buffer in place
+    // (Client::dispatchJSON parses it zero-copy); _onMessage always sees
+    // the untouched bytes. Overriding drains must preserve this order.
     void drainPending() {
         PendingMessage msg;
         while (_pending.pop(msg)) {
