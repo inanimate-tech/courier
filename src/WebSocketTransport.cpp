@@ -242,15 +242,24 @@ void WebSocketTransport::wsEventHandler(void* handler_arg,
         }
 
         // Multi-chunk: reassemble into PSRAM. +1 lets us NUL-terminate
-        // text payloads; unused for binary.
+        // text payloads; unused for binary. On boards without PSRAM (e.g.
+        // M5Dial / ESP32-S3FN8) the SPIRAM alloc returns NULL, which would
+        // silently drop every fragmented frame — i.e. any pushed app/shader
+        // over ~1KB. Fall back to internal RAM so those still arrive.
         if (isFirstChunk) {
             self->freeReassemblyBuf();
 #ifdef ESP_PLATFORM
             self->_reassemblyBuf = (char*)heap_caps_malloc(data->payload_len + 1, MALLOC_CAP_SPIRAM);
+            if (!self->_reassemblyBuf)
+                self->_reassemblyBuf = (char*)heap_caps_malloc(data->payload_len + 1, MALLOC_CAP_8BIT);
 #else
             self->_reassemblyBuf = (char*)malloc(data->payload_len + 1);
 #endif
-            if (!self->_reassemblyBuf) break;
+            if (!self->_reassemblyBuf) {
+                ESP_LOGW(TAG, "reassembly alloc failed (%d bytes), frame dropped",
+                         data->payload_len + 1);
+                break;
+            }
             self->_reassemblyLen = data->payload_len;
             self->_reassemblyPos = 0;
         }
@@ -262,15 +271,20 @@ void WebSocketTransport::wsEventHandler(void* handler_arg,
             self->_reassemblyPos += data->data_len;
 
             if (self->_reassemblyPos == self->_reassemblyLen) {
+                // Hand the buffer to the queue instead of copying — the
+                // queue's malloc+memcpy briefly doubled the footprint, which
+                // is what capped pushable app size on no-PSRAM boards.
+                char* buf = self->_reassemblyBuf;
+                size_t len = self->_reassemblyLen;
+                self->_reassemblyBuf = nullptr;
+                self->_reassemblyLen = 0;
+                self->_reassemblyPos = 0;
                 if (self->_reassemblyIsBinary) {
-                    self->queueIncomingBinary((const uint8_t*)self->_reassemblyBuf,
-                                               self->_reassemblyLen);
+                    self->queueIncomingBinaryOwned((uint8_t*)buf, len);
                 } else {
-                    self->_reassemblyBuf[self->_reassemblyLen] = '\0';
-                    self->queueIncomingMessage(self->_reassemblyBuf,
-                                                self->_reassemblyLen);
+                    buf[len] = '\0';
+                    self->queueIncomingMessageOwned(buf, len);
                 }
-                self->freeReassemblyBuf();
             }
         } else {
             ESP_LOGW(TAG, "WS reassembly overflow, dropping frame");

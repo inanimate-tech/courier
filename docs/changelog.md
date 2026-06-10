@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.4.3-dev
+
+Theme: receive-path memory — larger messages on no-PSRAM boards.
+
+### Improved
+
+- **Zero-copy receive hand-off.** New `Transport::queueIncomingMessageOwned` / `queueIncomingBinaryOwned` transfer ownership of an already-heap-allocated payload into the pending queue instead of malloc+memcpy-ing a second copy. `WebSocketTransport` hands its fragmented-frame reassembly buffer over this way, removing a transient 2× peak that capped receivable message size on boards without PSRAM (e.g. ESP32-S3FN8 / M5Dial). The copying `queueIncomingMessage` / `queueIncomingBinary` remain for payloads the transport doesn't own (single-frame WS, MQTT, UDP).
+- **Zero-copy JSON dispatch.** `Client::dispatchJSON` now parses the payload as mutable `char*`, so ArduinoJson points strings into the existing buffer instead of duplicating them into the document — large string fields (e.g. app code) are no longer held in memory twice during dispatch. Safe by the `drainPending` contract: payloads are heap-owned scratch buffers, the raw per-transport hook runs before the client hook, and the buffer outlives the dispatch callback.
+- **WebSocket reassembly buffer falls back to internal RAM** when the `MALLOC_CAP_SPIRAM` allocation fails (no-PSRAM boards), instead of silently dropping every fragmented frame.
+- **Receive-path failures now log.** Allocation failure, queue overflow, reassembly-buffer allocation failure, and JSON parse failure each emit a warning with the payload size — oversized messages no longer vanish without a trace.
+
+In practice this raises the largest receivable JSON message on a no-PSRAM ESP32-S3 from ~5 KB to ~12 KB+ (bounded by largest contiguous free block at parse time). PSRAM boards see strictly less copying.
+
+### Internal
+
+- `Transport::drainPending` documents the payload-buffer contract (heap-owned, NUL-terminated, `_onMessage` before `_clientHook`, client hook may mutate in place). Overriding drains must preserve this order.
+
+---
+
 ## v0.4.1
 
 Theme: per-transport endpoint state + manual reconnect trigger.
