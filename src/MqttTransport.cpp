@@ -302,13 +302,17 @@ void MqttTransport::mqttEventHandler(void* handler_arg,
             break;
         }
 
-        // Multi-chunk: reassemble into PSRAM to keep internal SRAM free.
+        // Multi-chunk: reassemble into PSRAM to keep internal SRAM free, but
+        // fall back to internal SRAM on boards without PSRAM (e.g. the M5Dial) —
+        // otherwise the alloc returns NULL and the whole message is dropped.
         // First chunk allocates buffer + captures topic (only first chunk
         // has event->topic per IDF docs).
         if (event->current_data_offset == 0) {
             self->freeReassemblyBuf();
 #ifdef ESP_PLATFORM
             self->_reassemblyBuf = (char*)heap_caps_malloc(event->total_data_len + 1, MALLOC_CAP_SPIRAM);
+            if (!self->_reassemblyBuf)
+                self->_reassemblyBuf = (char*)heap_caps_malloc(event->total_data_len + 1, MALLOC_CAP_8BIT);
 #else
             self->_reassemblyBuf = (char*)malloc(event->total_data_len + 1);
 #endif
