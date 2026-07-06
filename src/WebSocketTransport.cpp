@@ -151,20 +151,32 @@ bool WebSocketTransport::send(JsonDocument& doc, const SendOptions&)
     return sendText(buf);
 }
 
+// Bounded send timeout. A realtime send must never block its caller
+// indefinitely: under memory pressure the ESP-IDF WS client can stall mid-send
+// (e.g. holding its lock through a failing TLS reconnect), and portMAX_DELAY
+// would wedge the caller forever — killing a dedicated audio-send task. A
+// healthy send completes in a few ms, well under this bound; on timeout we
+// report failure and let the caller defer/retry (or the transport self-heal).
+#ifdef ESP_PLATFORM
+static constexpr TickType_t SEND_TIMEOUT = pdMS_TO_TICKS(250);
+#else
+static constexpr uint32_t SEND_TIMEOUT = portMAX_DELAY;  // host mock ignores timeout
+#endif
+
 bool WebSocketTransport::sendText(const char* payload)
 {
     if (!_connected.load(std::memory_order_acquire) || !_client) return false;
     int result = esp_websocket_client_send_text(_client, payload,
-                                                 strlen(payload), portMAX_DELAY);
-    return result >= 0;
+                                                 strlen(payload), SEND_TIMEOUT);
+    return result >= 0;  // on timeout/error the caller (Fix B) defers/retries
 }
 
 bool WebSocketTransport::sendBinary(const uint8_t* data, size_t len)
 {
     if (!_connected.load(std::memory_order_acquire) || !_client) return false;
     int result = esp_websocket_client_send_bin(_client, (const char*)data,
-                                                len, portMAX_DELAY);
-    return result >= 0;
+                                                len, SEND_TIMEOUT);
+    return result >= 0;  // on timeout/error the caller (Fix B) defers/retries
 }
 
 void WebSocketTransport::suspend()
