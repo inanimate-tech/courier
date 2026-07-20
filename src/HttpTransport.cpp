@@ -112,6 +112,11 @@ Response HttpTransport::performOnce(const char* url, const FetchOptions& opts,
     return resp;
 }
 
+Response HttpTransport::fetch(const char* url)
+{
+    return fetch(url, FetchOptions());
+}
+
 Response HttpTransport::fetch(const char* url, const FetchOptions& opts)
 {
     // Single attempt for now; retry loop lands in Task 5.

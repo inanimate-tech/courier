@@ -75,36 +75,6 @@ private:
     char* releaseBody(size_t* outLen);  // hand buffer ownership to the caller
 };
 
-// Forward declarations for default arguments
-class HttpTransport;
-
-struct HttpTransportConfig {
-    const char* cert_pem = nullptr;       // pin a CA (overrides the bundle)
-    bool use_cert_bundle = true;          // IDF cert bundle (esp_crt_bundle_attach)
-    size_t maxResponseBytes = 16 * 1024;  // buffered-body cap -> ErrTooLarge
-    uint32_t timeoutMs = 10000;           // per-request default
-    uint8_t retries = 3;                  // transport-failure retries default
-};
-
-using HttpTransportResponseCallback = std::function<void(int status, long contentLength)>;
-using HttpTransportBodyCallback = std::function<bool(const uint8_t* data, size_t length)>;
-using HttpTransportConfigureCallback = std::function<void(esp_http_client_config_t&)>;
-
-struct HttpTransportFetchOptions {
-    const char* method = nullptr;  // default "GET"; "POST" when body/json set
-    struct Header { const char* name; const char* value; };
-    const Header* headers = nullptr;  // caller-owned array
-    size_t headerCount = 0;
-    const char* body = nullptr;
-    size_t bodyLength = 0;         // 0 with body set -> strlen(body)
-    JsonDocument* json = nullptr;  // serialize as body + JSON content-type
-    int32_t timeoutMs = -1;        // -1 = inherit Config::timeoutMs
-    int16_t retries = -1;          // -1 = inherit Config::retries; 0 disables
-    HttpTransportResponseCallback onResponse;   // streaming: fires once, before chunks
-    HttpTransportBodyCallback onBody;           // streaming: return false to abort
-    HttpTransportConfigureCallback configure;   // per-call raw-config trapdoor
-};
-
 // HTTPS transport wrapping esp_http_client. Blocking, JS-shaped fetch();
 // full transport citizen: send(doc) POSTs JSON to the Config-seeded endpoint
 // and JSON responses dispatch through Client::onMessage. Appliance posture:
@@ -112,11 +82,32 @@ struct HttpTransportFetchOptions {
 // survives between fetches.
 class HttpTransport : public Transport {
 public:
-    struct Config : public HttpTransportConfig {};
-    using ResponseCallback = HttpTransportResponseCallback;
-    using BodyCallback = HttpTransportBodyCallback;
-    using ConfigureCallback = HttpTransportConfigureCallback;
-    struct FetchOptions : public HttpTransportFetchOptions {};
+    struct Config {
+        const char* cert_pem = nullptr;       // pin a CA (overrides the bundle)
+        bool use_cert_bundle = true;          // IDF cert bundle (esp_crt_bundle_attach)
+        size_t maxResponseBytes = 16 * 1024;  // buffered-body cap -> ErrTooLarge
+        uint32_t timeoutMs = 10000;           // per-request default
+        uint8_t retries = 3;                  // transport-failure retries default
+    };
+
+    using ResponseCallback  = std::function<void(int status, long contentLength)>;
+    using BodyCallback      = std::function<bool(const uint8_t* data, size_t length)>;
+    using ConfigureCallback = std::function<void(esp_http_client_config_t&)>;
+
+    struct FetchOptions {
+        const char* method = nullptr;  // default "GET"; "POST" when body/json set
+        struct Header { const char* name; const char* value; };
+        const Header* headers = nullptr;  // caller-owned array
+        size_t headerCount = 0;
+        const char* body = nullptr;
+        size_t bodyLength = 0;         // 0 with body set -> strlen(body)
+        JsonDocument* json = nullptr;  // serialize as body + JSON content-type
+        int32_t timeoutMs = -1;        // -1 = inherit Config::timeoutMs
+        int16_t retries = -1;          // -1 = inherit Config::retries; 0 disables
+        ResponseCallback onResponse;   // streaming: fires once, before chunks
+        BodyCallback onBody;           // streaming: return false to abort
+        ConfigureCallback configure;   // per-call raw-config trapdoor
+    };
 
     HttpTransport() {}
     explicit HttpTransport(const Config& config) : _cfg(config) {}
@@ -129,8 +120,12 @@ public:
     // Per-transport receive hook for send() responses (like WS onText).
     void onMessage(MessageCallback cb) { setMessageCallback(cb); }
 
-    Response fetch(const char* url, const FetchOptions& opts = FetchOptions());
-    Response get(const char* url) { return fetch(url, FetchOptions()); }
+    // Two overloads instead of `opts = {}`: Apple Clang rejects a defaulted
+    // FetchOptions argument inside the enclosing class definition ("default
+    // member initializer needed within definition of enclosing class").
+    Response fetch(const char* url);
+    Response fetch(const char* url, const FetchOptions& opts);
+    Response get(const char* url) { return fetch(url); }
     Response postJson(const char* url, JsonDocument& doc) {
         FetchOptions opts;
         opts.json = &doc;
