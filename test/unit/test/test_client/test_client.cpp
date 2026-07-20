@@ -556,6 +556,12 @@ void test_time_sync_301_response_still_sets_clock() {
     TEST_ASSERT_TRUE(Courier::systemClockForTests > Courier::buildEpoch());
     TEST_ASSERT_TRUE(Courier::systemClockForTests > time(nullptr));
     TEST_ASSERT_TRUE(Courier::systemClockForTests < time(nullptr) + 2 * 86400);
+    // The Date must have come from the 301 on the plain-HTTP leg — exactly
+    // one request. If the http leg had failed, the https fallback would run
+    // and could mask the failure by consuming the mock's default 200 step
+    // (which is what happened on-device under IDF 4.4, where perform()
+    // returns ESP_ERR_HTTP_MAX_REDIRECT for a non-followed redirect).
+    TEST_ASSERT_EQUAL(1, MockHttpClient::performCount());
 }
 
 void test_time_sync_rejects_date_before_build() {

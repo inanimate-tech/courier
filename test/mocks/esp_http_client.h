@@ -22,6 +22,7 @@ typedef int esp_err_t;
 #endif
 
 #define ESP_ERR_HTTP_BASE         0x7000
+#define ESP_ERR_HTTP_MAX_REDIRECT (ESP_ERR_HTTP_BASE + 1)
 #define ESP_ERR_HTTP_CONNECT      (ESP_ERR_HTTP_BASE + 2)
 #define ESP_ERR_HTTP_FETCH_HEADER (ESP_ERR_HTTP_BASE + 4)
 
@@ -146,6 +147,17 @@ public:
             (step.contentLength == -2) ? (long)total : step.contentLength;
 
         for (auto& h : step.headers) fireHeader(h.first.c_str(), h.second.c_str());
+
+        // IDF 4.4 semantics (esp_http_check_response): with
+        // disable_auto_redirect set, ANY non-2xx final status makes perform()
+        // return ESP_ERR_HTTP_MAX_REDIRECT after headers are parsed, without
+        // reading the body. (IDF 5.x instead treats a 3xx as a normal final
+        // response.) Model the stricter 4.4 behavior so the transport's
+        // classification is exercised against the worst case.
+        if (config.disable_auto_redirect && step.status >= 300) {
+            return ESP_ERR_HTTP_MAX_REDIRECT;
+        }
+
         for (auto& c : step.bodyChunks) {
             if (closed) break;
             fireData(c.data(), c.size());

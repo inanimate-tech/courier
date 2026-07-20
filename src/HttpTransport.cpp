@@ -308,6 +308,21 @@ Response HttpTransport::performOnce(const char* url, const FetchOptions& opts,
         return resp;
     }
 
+    if (err == ESP_ERR_HTTP_MAX_REDIRECT && status >= 100) {
+        // The server answered; the client just refused to (or could no
+        // longer) follow a redirect. On IDF 4.4, disable_auto_redirect makes
+        // perform() return this for ANY non-2xx status — after the status
+        // line and headers were parsed (IDF 5.x reports the 3xx as a normal
+        // response instead). Either way the response is real: report it so
+        // callers (e.g. the time-sync probe reading a 301's Date header) can
+        // use it, and the retry loop doesn't re-roll on a reachable server.
+        resp.status = status;
+        resp.contentLength = clen;
+        if (ctx.streaming && !ctx.responseFired && opts.onResponse) {
+            opts.onResponse(status, clen);
+        }
+        return resp;
+    }
     if (status >= 100 && ctx.sawBody) {
         // Connection dropped mid-body after a real status arrived.
         resp.status = status;
