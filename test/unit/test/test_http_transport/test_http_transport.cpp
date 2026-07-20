@@ -282,6 +282,31 @@ void test_fetch_final_redirect_not_followed_has_no_body() {
     TEST_ASSERT_EQUAL_STRING("Tue, 18 Feb 2026 12:00:00 GMT", r.header("Date"));
 }
 
+void test_fetch_final_redirect_with_body_still_complete() {
+    // A final (not-followed) 3xx with its own body chunks: contentLength is
+    // derived from the discarded body's real byte count, so the buffered
+    // size (0, since 3xx bodies are never accumulated) never matches it.
+    // That mismatch is expected for 3xx and must not flag the response as
+    // incomplete.
+    MockHttpClient::ScriptStep step;
+    step.status = 301;
+    step.headers = {{"Date", "Tue, 18 Feb 2026 12:00:00 GMT"},
+                    {"Location", "https://example.com/final"}};
+    step.bodyChunks = {"<html>redirecting</html>"};
+    MockHttpClient::pushScript(step);
+
+    HttpTransport::FetchOptions opts;
+    opts.configure = [](esp_http_client_config_t& cfg) {
+        cfg.disable_auto_redirect = true;
+    };
+    Response r = http->fetch("https://example.com/start", opts);
+    TEST_ASSERT_EQUAL(301, r.status);
+    TEST_ASSERT_TRUE(r.reachedServer());
+    TEST_ASSERT_EQUAL_STRING("", r.text());
+    TEST_ASSERT_EQUAL_STRING("Tue, 18 Feb 2026 12:00:00 GMT", r.header("Date"));
+    TEST_ASSERT_TRUE(r.complete());
+}
+
 void test_fetch_no_wifi_short_circuits() {
     WiFi.setMockStatus(WL_DISCONNECTED);
     Response r = http->fetch("https://example.com/api");
@@ -677,6 +702,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_fetch_buffered_redirect_delivers_only_final_hop);
     RUN_TEST(test_streaming_redirect_delivers_only_final_hop_chunks);
     RUN_TEST(test_fetch_final_redirect_not_followed_has_no_body);
+    RUN_TEST(test_fetch_final_redirect_with_body_still_complete);
     RUN_TEST(test_fetch_no_wifi_short_circuits);
     RUN_TEST(test_fetch_client_cleaned_up_per_request);
     RUN_TEST(test_response_move_semantics);

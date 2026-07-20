@@ -10,6 +10,7 @@
 #include <NetUtil.h>
 #include <ezTime.h>
 #include <cstring>
+#include <ctime>
 #include <vector>
 
 using namespace Courier;
@@ -514,12 +515,14 @@ void test_auto_ws_still_registers_for_default_and_explicit_ws() {
 
 void test_time_sync_sets_system_clock_from_date_header() {
     advanceToConnected();
-    // Default mock Date: Fri, 01 Jan 2027 12:00:00 GMT == 1798804800
-    // (verified via python3's calendar.timegm). Near-future rather than a
-    // date decades out, so it also stays under the 10-year plausibility
-    // ceiling in Client::syncTimeFromHttpDate() while still clearing the
-    // buildEpoch() floor as real wall-clock time advances.
-    TEST_ASSERT_EQUAL(1798804800, (long)Courier::systemClockForTests);
+    // Default mock Date is computed dynamically (real wall clock + 1 day) so
+    // it always clears the buildEpoch() floor and stays under the 10-year
+    // plausibility ceiling in Client::syncTimeFromHttpDate() regardless of
+    // when the test runs — assert against those computed properties rather
+    // than a literal epoch.
+    TEST_ASSERT_TRUE(Courier::systemClockForTests > Courier::buildEpoch());
+    TEST_ASSERT_TRUE(Courier::systemClockForTests > time(nullptr));
+    TEST_ASSERT_TRUE(Courier::systemClockForTests < time(nullptr) + 2 * 86400);
 }
 
 void test_time_sync_probe_disables_redirect_and_bounds_timeout() {
@@ -533,15 +536,26 @@ void test_time_sync_probe_disables_redirect_and_bounds_timeout() {
 }
 
 void test_time_sync_301_response_still_sets_clock() {
+    // Near-future date (real wall clock + 1 day), computed dynamically so
+    // this doesn't become a fixed-literal time bomb like the one it replaces
+    // (see MockHttpClient::resetMock()'s default Date, same rationale).
+    time_t t = time(nullptr) + 86400;
+    char dateBuf[40];
+    struct tm tmv;
+    gmtime_r(&t, &tmv);
+    strftime(dateBuf, sizeof(dateBuf), "%a, %d %b %Y %H:%M:%S GMT", &tmv);
+
     MockHttpClient::ScriptStep redirect;
     redirect.status = 301;  // the probe's 301 IS the final response (no follow)
     redirect.headers = {{"Location", "https://test.example.com/"},
-                        {"Date", "Fri, 01 Jan 2027 12:00:00 GMT"}};
+                        {"Date", dateBuf}};
     MockHttpClient::pushScript(redirect);
 
     advanceToConnected();
 
-    TEST_ASSERT_EQUAL(1798804800, (long)Courier::systemClockForTests);
+    TEST_ASSERT_TRUE(Courier::systemClockForTests > Courier::buildEpoch());
+    TEST_ASSERT_TRUE(Courier::systemClockForTests > time(nullptr));
+    TEST_ASSERT_TRUE(Courier::systemClockForTests < time(nullptr) + 2 * 86400);
 }
 
 void test_time_sync_rejects_date_before_build() {

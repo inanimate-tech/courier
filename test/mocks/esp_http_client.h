@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <utility>
 #include <vector>
@@ -163,13 +164,20 @@ public:
         s_lastInstance = nullptr;
         s_lastConfig = {};
         s_defaultStep = ScriptStep{};
-        // Near-future date (epoch 1798804800 - verified via python3) so it
-        // clears the buildEpoch() floor in Client::syncTimeFromHttpDate()
-        // regardless of when tests actually run (buildEpoch() reflects the
-        // real compile-time clock), while staying well under the 10-year
-        // plausibility ceiling added alongside that floor.
+        // Near-future date (real wall clock + 1 day), computed dynamically so
+        // it always clears the buildEpoch() floor in
+        // Client::syncTimeFromHttpDate() (buildEpoch() reflects the real
+        // compile-time clock) while staying well under the 10-year
+        // plausibility ceiling added alongside that floor - regardless of
+        // when tests actually run. A fixed literal here would eventually
+        // fall behind the real clock and start failing builds.
+        time_t t = time(nullptr) + 86400;
+        char dateBuf[40];
+        struct tm tmv;
+        gmtime_r(&t, &tmv);
+        strftime(dateBuf, sizeof(dateBuf), "%a, %d %b %Y %H:%M:%S GMT", &tmv);
         s_defaultStep.headers = {{"Content-Type", "application/json"},
-                                 {"Date", "Fri, 01 Jan 2027 12:00:00 GMT"}};
+                                 {"Date", dateBuf}};
         s_defaultStep.bodyChunks = {"{}"};
     }
 

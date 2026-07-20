@@ -6,10 +6,11 @@ Theme: receive-path memory — larger messages on no-PSRAM boards; `HttpTranspor
 
 ### New
 
-- **`HttpTransport`** — opt-in HTTPS transport (blocking `fetch()`, buffered or streaming) that also participates as a full transport citizen via `send()`/`onMessage`. The existing auto-`"ws"` registration rule is unchanged (`Config::host` set AND `defaultTransport` is `"ws"`/unset) — set `defaultTransport = "https"` to skip the built-in `"ws"` and use `HttpTransport` instead. See the README's HTTPS section.
+- **`HttpTransport`** — opt-in HTTPS transport (blocking `fetch()`, buffered or streaming) that also participates as a full transport citizen via `send()`/`onMessage`. Set `defaultTransport = "https"` to skip the built-in `"ws"` and use `HttpTransport` instead. See the README's HTTPS section.
 
 ### Upgrading notes
 
+- **Behavior change: built-in `"ws"` auto-registration is now conditional on `defaultTransport`.** The built-in `"ws"` transport now auto-registers only when `Config::host` is set AND `defaultTransport` is `"ws"` or unset. Previously it registered whenever `host` was set, regardless of `defaultTransport`. If you relied on the implicit WS transport alongside a different default (e.g. `defaultTransport: "mqtt"`), register it explicitly with `addTransport<WebSocketTransport>("ws")`.
 - **Binary size.** `esp_http_client` and the IDF certificate bundle are now always linked in (Courier's time-sync bootstrap depends on them), adding roughly +80-100KB to firmware binary size even for projects that never construct an `HttpTransport`.
 - **`settimeofday` now set by Courier.** `Client::syncTimeFromHttpDate()` calls `setSystemClock()` (`settimeofday`) in addition to ezTime's `UTC.setTime()` — previously only ezTime's virtual clock was set from the HTTP Date header, so the system clock (which mbedTLS/TLS cert validation reads) stayed at its boot default until NTP arrived. `Client::loop()`'s NTP bridge now also re-fires whenever ezTime and the system clock diverge by more than 5s (previously a one-shot latch), so a later genuine NTP correction can repair a poisoned or drifted system clock.
 

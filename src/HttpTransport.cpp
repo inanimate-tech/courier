@@ -296,7 +296,12 @@ Response HttpTransport::performOnce(const char* url, const FetchOptions& opts,
             resp.contentLength = clen;
             if (ctx.streaming && opts.onResponse) opts.onResponse(status, clen);
         }
-        if (!ctx.streaming && resp.contentLength >= 0 &&
+        // 3xx bodies are intentionally discarded (see eventHandler's
+        // isRedirectHop branch) — the accumulated size never matches
+        // Content-Length for those responses, so the mismatch below is
+        // expected and must not be flagged as incomplete.
+        bool isRedirectStatus = resp.status >= 300 && resp.status < 400;
+        if (!ctx.streaming && !isRedirectStatus && resp.contentLength >= 0 &&
             (long)resp.size() != resp.contentLength) {
             resp._complete = false;
         }
