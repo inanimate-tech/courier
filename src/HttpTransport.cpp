@@ -10,6 +10,12 @@
 #include "esp_wifi.h"
 #include "esp_crt_bundle.h"
 #include "esp32-hal.h"  // delay() — Arduino.h conflicts with IDF lwip headers
+// Arduino-only builds (prebuilt arduino-esp32 core): WiFiClientSecure ships a
+// same-named esp_crt_bundle.h that shadows the IDF one and declares only
+// arduino_esp_crt_bundle_attach. The IDF symbol (and the default bundle data)
+// is still present in the prebuilt libmbedtls.a — re-declare it so both
+// include orders compile. Harmless redeclaration in hybrid/IDF builds.
+extern "C" esp_err_t esp_crt_bundle_attach(void* conf);
 static const char* TAG = "HttpTransport";
 #else
 #include <Arduino.h>

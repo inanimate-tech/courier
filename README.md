@@ -50,12 +50,49 @@ void setup() {
 void loop() { courier.loop(); }
 ```
 
+## HTTPS
+
+`HttpTransport` gives you a JS-shaped `fetch()` alongside WiFi and time sync — useful on its own (no WS/MQTT) or as an extra transport. Set `defaultTransport = "https"` to skip auto-registering `"ws"`:
+
+```cpp
+#include <Courier.h>
+#include <HttpTransport.h>
+
+Courier::Config makeConfig() {
+  Courier::Config cfg;
+  cfg.host = "httpbin.org";
+  cfg.port = 443;
+  cfg.path = "/anything";          // send() POSTs here
+  cfg.defaultTransport = "https";  // no built-in "ws"
+  return cfg;
+}
+
+Courier::Client courier(makeConfig());
+
+void setup() {
+  auto& http = courier.addTransport<Courier::HttpTransport>("https");
+
+  courier.onConnected([]() {
+    auto& http = courier.transport<Courier::HttpTransport>("https");
+    Courier::Response r = http.get("https://httpbin.org/get");
+    Serial.printf("GET -> %d\n", r.status);
+  });
+
+  courier.setup();
+}
+
+void loop() { courier.loop(); }
+```
+
+See [examples/https-only](examples/https-only/https-only.ino) for the full sketch.
+
 ## What it does
 
 - **WiFi** — captive portal config via WiFiManager, auto-reconnection
 - **WebSocket** — built-in transport with TLS, ping/pong heartbeat, self-healing auto-reconnect
 - **MQTT** — opt-in transport with subscribe/unsubscribe, topic-addressed publishing, self-healing auto-reconnect
 - **UDP multicast** — opt-in transport for local network discovery and messaging
+- **HTTPS** — opt-in transport with a JS-shaped `fetch()` (buffered or streaming), plus `send()`/`onMessage` for the messaging idiom
 - **Self-healing** — transports auto-reconnect independently; if all persistent transports fail after 60s, Courier escalates to full WiFi reconnection
 - **Reconnection** — exponential backoff (5s-60s), health monitoring, automatic recovery
 - **Time sync** — NTP primary (continuous drift correction) + HTTP Date header fallback

@@ -3,9 +3,11 @@ idf_component_register(
          "src/WebSocketTransport.cpp"
          "src/MqttTransport.cpp"
          "src/UdpTransport.cpp"
+         "src/HttpTransport.cpp"
+         "src/NetUtil.cpp"
     INCLUDE_DIRS "src"
-    REQUIRES espressif__arduino-esp32 espressif__esp_websocket_client mqtt bblanchon__arduinojson
-    PRIV_REQUIRES esp_http_client esp-tls esp_wifi esp_https_server
+    REQUIRES espressif__arduino-esp32 espressif__esp_websocket_client mqtt bblanchon__arduinojson esp_http_client
+    PRIV_REQUIRES esp-tls esp_wifi esp_https_server mbedtls
 )
 
 # ezTime and WiFiManager aren't on the ESP Component Registry, and the registry
