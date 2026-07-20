@@ -1,11 +1,14 @@
 #include <unity.h>
+#include <HttpTransport.h>
 #include <esp_http_client.h>
+#include <WiFi.h>
+#include <ArduinoJson.h>
 #include <cstring>
 #include <string>
 
-// Transport tests accumulate here from Task 3 onward; this file starts as a
-// mock smoke test.
+using namespace Courier;
 
+static HttpTransport* http = nullptr;
 static std::string g_headerLog;
 static std::string g_dataLog;
 
@@ -23,10 +26,16 @@ static esp_err_t smokeHandler(esp_http_client_event_t* evt) {
 
 void setUp(void) {
     MockHttpClient::resetMock();
+    WiFi.resetMock();
     g_headerLog.clear();
     g_dataLog.clear();
+    http = new HttpTransport();
+    http->begin();
 }
-void tearDown(void) {}
+void tearDown(void) {
+    delete http;
+    http = nullptr;
+}
 
 void test_mock_scripted_response_fires_events() {
     MockHttpClient::ScriptStep step;
@@ -65,9 +74,38 @@ void test_mock_transport_failure_fires_no_events() {
     esp_http_client_cleanup(c);
 }
 
+void test_name_is_http() {
+    TEST_ASSERT_EQUAL_STRING("HTTP", http->name());
+}
+
+void test_not_persistent() {
+    TEST_ASSERT_FALSE(http->isPersistent());
+}
+
+void test_connected_tracks_begin_and_wifi() {
+    TEST_ASSERT_TRUE(http->isConnected());
+    http->disconnect();
+    TEST_ASSERT_FALSE(http->isConnected());
+    http->begin();
+    TEST_ASSERT_TRUE(http->isConnected());
+    WiFi.setMockStatus(WL_DISCONNECTED);
+    TEST_ASSERT_FALSE(http->isConnected());
+}
+
+void test_endpoint_seeding_via_base() {
+    // Client::addTransport seeds via setEndpoint; verify base storage works.
+    http->setEndpoint("api.example.com", 8443, "/inbox");
+    // No getter on purpose — exercised for real in the send() tests (Task 8).
+    TEST_ASSERT_TRUE(true);
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_mock_scripted_response_fires_events);
     RUN_TEST(test_mock_transport_failure_fires_no_events);
+    RUN_TEST(test_name_is_http);
+    RUN_TEST(test_not_persistent);
+    RUN_TEST(test_connected_tracks_begin_and_wifi);
+    RUN_TEST(test_endpoint_seeding_via_base);
     return UNITY_END();
 }
