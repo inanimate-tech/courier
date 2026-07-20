@@ -220,6 +220,9 @@ inline esp_err_t esp_http_client_close(esp_http_client_handle_t c)
 inline esp_err_t esp_http_client_cleanup(esp_http_client_handle_t c)
 {
     MockHttpClient::s_cleanupCount++;
-    delete c;
+    // Note: we intentionally DON'T delete c here, to allow tests to access
+    // instance data (postBody, requestHeaders) after cleanup. This is a
+    // memory leak in tests, but safe for unit testing.
+    (void)c;
     return ESP_OK;
 }
