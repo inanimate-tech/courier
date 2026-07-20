@@ -1,5 +1,6 @@
 #include <unity.h>
 #include <HttpTransport.h>
+#include <NetUtil.h>
 #include <esp_http_client.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
@@ -29,6 +30,7 @@ void setUp(void) {
     WiFi.resetMock();
     g_headerLog.clear();
     g_dataLog.clear();
+    dnsFlushCountForTests = 0;
     http = new HttpTransport();
     http->begin();
 }
@@ -232,6 +234,97 @@ void test_response_move_semantics() {
     TEST_ASSERT_EQUAL(0, (int)a.size());
 }
 
+void test_retry_on_transport_failure_then_success() {
+    MockHttpClient::ScriptStep fail;
+    fail.performResult = ESP_ERR_HTTP_CONNECT;
+    fail.status = 0;
+    MockHttpClient::pushScript(fail);
+    MockHttpClient::pushScript(fail);
+    MockHttpClient::ScriptStep okStep;
+    okStep.bodyChunks = {"ok"};
+    MockHttpClient::pushScript(okStep);
+
+    Response r = http->fetch("https://example.com/api");
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_EQUAL_STRING("ok", r.text());
+    TEST_ASSERT_EQUAL(3, MockHttpClient::performCount());
+    TEST_ASSERT_EQUAL(2, dnsFlushCountForTests);      // flushed BETWEEN attempts
+    TEST_ASSERT_EQUAL(3, MockHttpClient::cleanupCount());  // teardown per attempt
+}
+
+void test_all_retries_exhausted_returns_last_error() {
+    MockHttpClient::ScriptStep fail;
+    fail.performResult = ESP_ERR_HTTP_CONNECT;
+    fail.status = 0;
+    for (int i = 0; i < 4; i++) MockHttpClient::pushScript(fail);
+
+    Response r = http->fetch("https://example.com/api");  // default retries=3
+    TEST_ASSERT_EQUAL(Http::ErrConnect, r.status);
+    TEST_ASSERT_EQUAL(4, MockHttpClient::performCount());  // 1 + 3 retries
+    TEST_ASSERT_EQUAL(3, dnsFlushCountForTests);
+}
+
+void test_http_error_status_never_retries() {
+    MockHttpClient::ScriptStep err500;
+    err500.status = 500;
+    err500.bodyChunks = {"boom"};
+    MockHttpClient::pushScript(err500);
+
+    Response r = http->fetch("https://example.com/api");
+    TEST_ASSERT_EQUAL(500, r.status);
+    TEST_ASSERT_TRUE(r.reachedServer());
+    TEST_ASSERT_FALSE(r.ok());
+    TEST_ASSERT_EQUAL(1, MockHttpClient::performCount());
+    TEST_ASSERT_EQUAL(0, dnsFlushCountForTests);
+}
+
+void test_retries_zero_disables() {
+    MockHttpClient::ScriptStep fail;
+    fail.performResult = ESP_ERR_HTTP_CONNECT;
+    fail.status = 0;
+    MockHttpClient::pushScript(fail);
+    HttpTransport::FetchOptions opts;
+    opts.retries = 0;
+    Response r = http->fetch("https://example.com/api", opts);
+    TEST_ASSERT_EQUAL(Http::ErrConnect, r.status);
+    TEST_ASSERT_EQUAL(1, MockHttpClient::performCount());
+}
+
+void test_per_call_retries_override_config() {
+    MockHttpClient::ScriptStep fail;
+    fail.performResult = ESP_ERR_HTTP_CONNECT;
+    fail.status = 0;
+    for (int i = 0; i < 2; i++) MockHttpClient::pushScript(fail);
+    HttpTransport::FetchOptions opts;
+    opts.retries = 1;
+    Response r = http->fetch("https://example.com/api", opts);
+    TEST_ASSERT_EQUAL(Http::ErrConnect, r.status);
+    TEST_ASSERT_EQUAL(2, MockHttpClient::performCount());
+}
+
+void test_timeout_classification() {
+    MockHttpClient::ScriptStep t;
+    t.performResult = ESP_ERR_HTTP_FETCH_HEADER;
+    t.status = 0;
+    for (int i = 0; i < 4; i++) MockHttpClient::pushScript(t);
+    Response r = http->fetch("https://example.com/api");
+    TEST_ASSERT_EQUAL(Http::ErrTimeout, r.status);
+}
+
+void test_too_large_response_never_retries() {
+    HttpTransport::Config cfg;
+    cfg.maxResponseBytes = 4;
+    HttpTransport small(cfg);
+    small.begin();
+    MockHttpClient::ScriptStep big;
+    big.bodyChunks = {"12345678"};
+    MockHttpClient::pushScript(big);
+    Response r = small.fetch("https://example.com/api");
+    TEST_ASSERT_EQUAL(Http::ErrTooLarge, r.status);
+    TEST_ASSERT_EQUAL(1, MockHttpClient::performCount());
+    TEST_ASSERT_EQUAL(0, dnsFlushCountForTests);
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_mock_scripted_response_fires_events);
@@ -251,5 +344,12 @@ int main(int argc, char** argv) {
     RUN_TEST(test_fetch_no_wifi_short_circuits);
     RUN_TEST(test_fetch_client_cleaned_up_per_request);
     RUN_TEST(test_response_move_semantics);
+    RUN_TEST(test_retry_on_transport_failure_then_success);
+    RUN_TEST(test_all_retries_exhausted_returns_last_error);
+    RUN_TEST(test_http_error_status_never_retries);
+    RUN_TEST(test_retries_zero_disables);
+    RUN_TEST(test_per_call_retries_override_config);
+    RUN_TEST(test_timeout_classification);
+    RUN_TEST(test_too_large_response_never_retries);
     return UNITY_END();
 }

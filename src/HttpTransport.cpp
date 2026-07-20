@@ -302,7 +302,27 @@ Response HttpTransport::fetch(const char* url, const FetchOptions& opts)
         return resp;
     }
 
-    return performOnce(url, opts, bodyBuf, bodyLen, contentType);
+    int attempts = 1 + (opts.retries >= 0 ? opts.retries : (int)_cfg.retries);
+    Response resp;
+    for (int attempt = 1; attempt <= attempts; attempt++) {
+        resp = performOnce(url, opts, bodyBuf, bodyLen, contentType);
+        // Any real HTTP status means the server was reached — done, even on
+        // 5xx. Abort and over-cap are caller/client-side finals too.
+        if (resp.status >= 100 || resp.status == Http::ErrAborted ||
+            resp.status == Http::ErrTooLarge) {
+            return resp;
+        }
+        if (attempt < attempts) {
+            ESP_LOGW(TAG,
+                     "fetch attempt %d/%d failed (%d) - flushing DNS, retrying",
+                     attempt, attempts, resp.status);
+            // Anycast DNS shuffles record order per query: a fresh resolve
+            // is a coin-flip failover away from a broken IP.
+            flushDnsCache();
+            delay(RETRY_DELAY_MS);
+        }
+    }
+    return resp;
 }
 
 bool HttpTransport::send(JsonDocument& doc, const SendOptions& options)
