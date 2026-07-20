@@ -5,6 +5,7 @@
 #include <mqtt_client.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <NetUtil.h>
 #include <cstring>
 #include <vector>
 
@@ -406,6 +407,18 @@ void test_reconnect_transitions_through_reconnecting() {
     // verify the public method puts us in Reconnecting state.
 }
 
+void test_dns_flush_on_transports_connecting_entry() {
+    int before = dnsFlushCountForTests;
+    courier->setup();
+    courier->loop();  // WifiConnecting -> WifiConnected
+    courier->loop();  // WifiConnected -> TransportsConnecting
+    courier->loop();  // TransportsConnecting entry: flush, then begin()
+    TEST_ASSERT_EQUAL(before + 1, dnsFlushCountForTests);
+    // Subsequent loops in the same connect cycle must NOT flush again.
+    courier->loop();
+    TEST_ASSERT_EQUAL(before + 1, dnsFlushCountForTests);
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
 
@@ -433,6 +446,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_setEndpoint_overrides_seeded_values);
     RUN_TEST(test_setEndpoint_copies_string_inputs);
     RUN_TEST(test_reconnect_transitions_through_reconnecting);
+    RUN_TEST(test_dns_flush_on_transports_connecting_entry);
 
     return UNITY_END();
 }

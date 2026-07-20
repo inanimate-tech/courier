@@ -1,4 +1,5 @@
 #include "Courier.h"
+#include "NetUtil.h"
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <ezTime.h>
@@ -194,6 +195,13 @@ void Client::handleTransportsConnectingState()
   if (!_transportsBeginCalled) {
     clearTransportFailureFlags();
     _transportsBeginCalled = true;
+
+    // Re-resolve DNS on every connect cycle (initial setup AND each
+    // recovery pass routes through here). Anycast DNS shuffles record
+    // order, so a fresh resolve is the cheap failover away from a broken
+    // cached IP. Harmless when the outage was WiFi-side.
+    flushDnsCache();
+
     for (int i = 0; i < _transportCount; i++) {
       TransportEntry& entry = _transports[i];
       if (!entry.transport || entry.transport->isConnected()) continue;
