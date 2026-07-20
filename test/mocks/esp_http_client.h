@@ -139,8 +139,11 @@ public:
         s_lastInstance = nullptr;
         s_lastConfig = {};
         s_defaultStep = ScriptStep{};
+        // Far-future date so it always clears the buildEpoch() floor in
+        // Client::syncTimeFromHttpDate(), regardless of when tests actually
+        // run (buildEpoch() reflects the real compile-time clock).
         s_defaultStep.headers = {{"Content-Type", "application/json"},
-                                 {"Date", "Tue, 18 Feb 2026 12:00:00 GMT"}};
+                                 {"Date", "Tue, 01 Jan 2099 12:00:00 GMT"}};
         s_defaultStep.bodyChunks = {"{}"};
     }
 

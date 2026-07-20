@@ -3,11 +3,12 @@
 #include <Transport.h>
 #include <MqttTransport.h>
 #include <mqtt_client.h>
-#include <HTTPClient.h>
+#include <WiFi.h>
 #include <HttpTransport.h>
 #include <esp_http_client.h>
 #include <ArduinoJson.h>
 #include <NetUtil.h>
+#include <ezTime.h>
 #include <cstring>
 #include <vector>
 
@@ -86,9 +87,9 @@ void setUp(void) {
     _mock_millis = 0;
     WiFi.resetMock();
     MockWebSocketClient::resetInstanceCount();
-    HTTPClient::setDefaultMockResponse(200, "{}");
-    HTTPClient::setDefaultMockHeader("Tue, 18 Feb 2026 12:00:00 GMT");
-    MockHttpClient::resetMock();
+    MockHttpClient::resetMock();  // default step carries the Date header
+    Courier::systemClockForTests = 0;
+    g_mockTimeStatus = timeSet;
     Serial.stopCapture();
 
     Config config;
@@ -101,7 +102,6 @@ void setUp(void) {
 void tearDown(void) {
     delete courier;
     courier = nullptr;
-    HTTPClient::resetMockDefaults();
 }
 
 void test_initial_state() {
@@ -498,6 +498,46 @@ void test_auto_ws_still_registers_for_default_and_explicit_ws() {
     TEST_ASSERT_EQUAL(1, MockWebSocketClient::instanceCount());
 }
 
+void test_time_sync_sets_system_clock_from_date_header() {
+    advanceToConnected();
+    // Default mock Date: Tue, 01 Jan 2099 12:00:00 GMT == 4070952000. Kept
+    // far in the future (rather than a fixed near-term date) so this test
+    // isn't time-bombed by the buildEpoch() floor as real wall-clock time
+    // advances past whatever date the test suite was authored on.
+    TEST_ASSERT_EQUAL(4070952000, (long)Courier::systemClockForTests);
+}
+
+void test_time_sync_rejects_date_before_build() {
+    MockHttpClient::ScriptStep old;
+    old.status = 200;
+    old.headers = {{"Date", "Mon, 01 Jan 2001 00:00:00 GMT"}};
+    MockHttpClient::pushScript(old);  // http:// attempt
+    MockHttpClient::pushScript(old);  // https:// fallback attempt
+    advanceToConnected();
+    TEST_ASSERT_EQUAL(0, (long)Courier::systemClockForTests);
+}
+
+void test_ntp_bridge_sets_system_clock_once() {
+    g_mockTimeStatus = timeNotSet;   // suppress bridge during connect
+    MockHttpClient::ScriptStep noDate;
+    noDate.status = 200;             // Date-less responses: HTTP sync fails
+    MockHttpClient::pushScript(noDate);
+    MockHttpClient::pushScript(noDate);
+    advanceToConnected();
+    TEST_ASSERT_EQUAL(0, (long)Courier::systemClockForTests);
+
+    // NTP "arrives": ezTime reports synced with a real epoch.
+    g_mockTimeStatus = timeSet;
+    UTC.setMockNow((time_t)1771416000);
+    courier->loop();
+    TEST_ASSERT_EQUAL(1771416000, (long)Courier::systemClockForTests);
+
+    // Bridge fires once — later drift corrections stay inside ezTime.
+    UTC.setMockNow((time_t)1771417000);
+    courier->loop();
+    TEST_ASSERT_EQUAL(1771416000, (long)Courier::systemClockForTests);
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
 
@@ -529,6 +569,9 @@ int main(int argc, char** argv) {
     RUN_TEST(test_https_only_no_auto_ws_and_send_routes);
     RUN_TEST(test_https_reply_reaches_client_onmessage);
     RUN_TEST(test_auto_ws_still_registers_for_default_and_explicit_ws);
+    RUN_TEST(test_time_sync_sets_system_clock_from_date_header);
+    RUN_TEST(test_time_sync_rejects_date_before_build);
+    RUN_TEST(test_ntp_bridge_sets_system_clock_once);
 
     return UNITY_END();
 }

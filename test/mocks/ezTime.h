@@ -10,7 +10,8 @@ public:
     bool setLocation(const String& location = "") { return true; }
     bool setLocation(const char* location) { return true; }
     String dateTime(const String& format = "") { return String("2025-01-20 12:00:00"); }
-    time_t now() { return 0; }
+    time_t now() { return _mockNow; }
+    void setMockNow(time_t t) { _mockNow = t; }
     int hour(time_t t = 0) { return 12; }
     int minute(time_t t = 0) { return 0; }
     int second(time_t t = 0) { return 0; }
@@ -23,6 +24,9 @@ public:
     int getOffset() { return 0; }
     void setTime(time_t t) {}
     void setTime(int hr, int min, int sec, int day, int month, int yr) {}
+
+private:
+    time_t _mockNow = 0;
 };
 
 extern Timezone UTC;
@@ -33,7 +37,8 @@ inline void setDebug(int level) {}
 inline void setServer(const String& server) {}
 inline void setServer(const char* server) {}
 inline void setInterval(uint16_t interval = 0) {}
-inline timeStatus_t timeStatus() { return timeSet; }
+inline timeStatus_t g_mockTimeStatus = timeSet;
+inline timeStatus_t timeStatus() { return g_mockTimeStatus; }
 inline void waitForSync(uint16_t timeout = 0) {}
 inline bool updateNTP() { return true; }
 inline String dateTime(const String& format = "") { return String("2025-01-20 12:00:00"); }

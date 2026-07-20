@@ -1,7 +1,7 @@
 #include "Courier.h"
+#include "HttpTransport.h"
 #include "NetUtil.h"
-#include <HTTPClient.h>
-#include <WiFiClientSecure.h>
+#include <WiFi.h>
 #include <ezTime.h>
 #ifdef ESP_PLATFORM
 #include <esp_netif.h>
@@ -74,6 +74,18 @@ void Client::loop()
   // HTTP Date header (in syncTimeFromHttpDate) is the fallback for first boot
   // when NTP hasn't resolved yet.
   events();
+
+  // Bridge ezTime -> system clock once NTP has synced: mbedTLS validates
+  // certificate dates against the system clock (settimeofday), which
+  // ezTime's own sync never touches. Without this, TLS validation can stay
+  // broken forever on devices that only ever sync via NTP.
+  if (!_systemClockBridged && timeStatus() == timeSet) {
+    time_t nowUtc = UTC.now();
+    if (nowUtc > 0) {
+      setSystemClock(nowUtc);
+      _systemClockBridged = true;
+    }
+  }
 
   switch (_state)
   {
@@ -382,69 +394,53 @@ void Client::staticWifiFailedCallback(WiFiManager* wm)
 }
 
 // --- Time sync ---
-// Fallback for first boot when NTP hasn't resolved yet. Parses the Date
-// header from an HTTPS response to the configured host. NTP (via ezTime
-// events() in loop()) is the primary time source for ongoing accuracy.
+// Fallback for first boot when NTP hasn't resolved yet. Bootstrap problem:
+// TLS certificate validation needs a roughly-correct clock, but this IS the
+// clock source on cold boot. So: plain HTTP (port 80) first — any response,
+// even a redirect, carries a Date header — then HTTPS with the cert bundle
+// (succeeds when the RTC is already warm). The build-epoch floor rejects
+// clock-rollback on the unauthenticated leg. NTP (ezTime events() in loop())
+// remains the primary ongoing time source.
 
 bool Client::syncTimeFromHttpDate()
 {
-  WiFiClientSecure client;
-  client.setInsecure();
+  HttpTransport http;
+  http.begin();
+  HttpTransport::FetchOptions opts;
+  opts.method = "HEAD";
 
-  HTTPClient http;
-  http.begin(client, String("https://") + _config.host + "/");
-
-  const char* headerKeys[] = {"Date"};
-  http.collectHeaders(headerKeys, 1);
-
-  int httpCode = http.sendRequest("HEAD");
-
-  if (httpCode != 200 && httpCode != 204 && httpCode != 301 && httpCode != 302) {
-    Serial.printf("[courier] HTTP time request failed: %d\n", httpCode);
-    http.end();
+  char url[192];
+  snprintf(url, sizeof(url), "http://%s/", _config.host);
+  Response r = http.fetch(url, opts);
+  if (!r.reachedServer() || !r.header("Date")) {
+    snprintf(url, sizeof(url), "https://%s/", _config.host);
+    r = http.fetch(url, opts);
+  }
+  if (!r.reachedServer()) {
+    Serial.printf("[courier] HTTP time request failed: %d\n", r.status);
     return false;
   }
 
-  String dateHeader = http.header("Date");
-  http.end();
-
-  if (dateHeader.isEmpty()) {
+  const char* dateHeader = r.header("Date");
+  if (!dateHeader) {
     Serial.println("[courier] No Date header in response");
     return false;
   }
+  Serial.printf("[courier] Date header: %s\n", dateHeader);
 
-  Serial.printf("[courier] Date header: %s\n", dateHeader.c_str());
-
-  int day, year, hour, minute, second;
-  char monthStr[4];
-
-  int parsed = sscanf(dateHeader.c_str(), "%*[^,], %d %3s %d %d:%d:%d",
-                      &day, monthStr, &year, &hour, &minute, &second);
-
-  if (parsed != 6) {
-    Serial.printf("[courier] Failed to parse Date header (parsed %d fields)\n", parsed);
+  time_t epoch = parseHttpDateToEpoch(dateHeader);
+  if (epoch == 0) {
+    Serial.println("[courier] Failed to parse Date header");
+    return false;
+  }
+  if (epoch < buildEpoch()) {
+    Serial.println("[courier] Date header predates firmware build - rejecting");
     return false;
   }
 
-  const char* months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-  int month = 0;
-  for (int i = 0; i < 12; i++) {
-    if (strcmp(monthStr, months[i]) == 0) {
-      month = i + 1;
-      break;
-    }
-  }
-
-  if (month == 0) {
-    Serial.printf("[courier] Unknown month: %s\n", monthStr);
-    return false;
-  }
-
-  setTime(hour, minute, second, day, month, year);
-  Serial.printf("[courier] Time set to: %04d-%02d-%02d %02d:%02d:%02d UTC\n",
-                year, month, day, hour, minute, second);
-
+  setSystemClock(epoch);   // mbedTLS reads the system clock for cert dates
+  UTC.setTime(epoch);      // ezTime for display/scheduling
+  Serial.println("[courier] Time set from HTTP Date header");
   return true;
 }
 
