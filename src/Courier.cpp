@@ -21,11 +21,14 @@ Client::Client(const Config& config)
 {
   _instance = this;
 
-  // Auto-register a built-in WebSocketTransport as "ws" when the Config
-  // provides a host. Users with no need for the built-in (MQTT-only,
-  // UDP-only, or fully-custom transport setups) leave host null and
-  // register their own transports explicitly.
-  if (_config.host && _config.host[0] != '\0') {
+  // Auto-register the built-in WebSocketTransport as "ws" when the Config
+  // provides a host AND the default transport is (or defaults to) "ws".
+  // A Config aimed at another default ("https", "mqtt", ...) means the user
+  // is bringing their own transport — don't spend RAM on a stray WS
+  // connection to the same host.
+  bool wsIsDefault = !_config.defaultTransport ||
+                     strcmp(_config.defaultTransport, "ws") == 0;
+  if (wsIsDefault && _config.host && _config.host[0] != '\0') {
     addTransport<WebSocketTransport>("ws");
   }
 }

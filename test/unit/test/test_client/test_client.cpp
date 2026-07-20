@@ -4,6 +4,8 @@
 #include <MqttTransport.h>
 #include <mqtt_client.h>
 #include <HTTPClient.h>
+#include <HttpTransport.h>
+#include <esp_http_client.h>
 #include <ArduinoJson.h>
 #include <NetUtil.h>
 #include <cstring>
@@ -83,8 +85,10 @@ static void advanceToConnected() {
 void setUp(void) {
     _mock_millis = 0;
     WiFi.resetMock();
+    MockWebSocketClient::resetInstanceCount();
     HTTPClient::setDefaultMockResponse(200, "{}");
     HTTPClient::setDefaultMockHeader("Tue, 18 Feb 2026 12:00:00 GMT");
+    MockHttpClient::resetMock();
     Serial.stopCapture();
 
     Config config;
@@ -419,6 +423,81 @@ void test_dns_flush_on_transports_connecting_entry() {
     TEST_ASSERT_EQUAL(before + 1, dnsFlushCountForTests);
 }
 
+static std::string g_clientMsgLog;
+
+void test_https_only_no_auto_ws_and_send_routes() {
+    // HTTPS-only persona: host set for endpoint/time-sync, default "https".
+    delete courier;
+    Config cfg;
+    cfg.host = "api.example.com";
+    cfg.port = 443;
+    cfg.path = "/inbox";
+    cfg.defaultTransport = "https";
+    courier = new Client(cfg);
+
+    // No built-in WS was auto-registered: the HttpTransport is the only one.
+    auto& http = courier->addTransport<HttpTransport>("https");
+
+    courier->setup();
+    courier->loop();  // WifiConnecting -> WifiConnected
+    courier->loop();  // WifiConnected -> TransportsConnecting
+    courier->loop();  // begin() -> HttpTransport connected (WiFi up)
+    courier->loop();  // -> Connected
+    TEST_ASSERT_TRUE(courier->isConnected());
+    TEST_ASSERT_EQUAL(0, MockWebSocketClient::instanceCount());  // no stray WS
+
+    JsonDocument doc;
+    doc["type"] = "status";
+    TEST_ASSERT_TRUE(courier->send(doc));  // routed via defaultTransport
+    TEST_ASSERT_EQUAL_STRING("https://api.example.com/inbox",
+        MockHttpClient::lastInstance()->url.c_str());
+}
+
+void test_https_reply_reaches_client_onmessage() {
+    delete courier;
+    Config cfg;
+    cfg.host = "api.example.com";
+    cfg.defaultTransport = "https";
+    courier = new Client(cfg);
+    courier->addTransport<HttpTransport>("https");
+    g_clientMsgLog.clear();
+    courier->onMessage([](const char* tname, const char* type, JsonDocument& doc) {
+        g_clientMsgLog += tname;
+        g_clientMsgLog += ":";
+        g_clientMsgLog += type;
+    });
+
+    courier->setup();
+    courier->loop();
+    courier->loop();
+    courier->loop();
+    courier->loop();
+
+    MockHttpClient::ScriptStep reply;
+    reply.status = 200;
+    reply.headers = {{"Content-Type", "application/json"}};
+    reply.bodyChunks = {"{\"type\":\"welcome\"}"};
+    MockHttpClient::pushScript(reply);
+
+    JsonDocument doc;
+    doc["type"] = "hello";
+    TEST_ASSERT_TRUE(courier->send(doc));
+    courier->loop();  // drain -> dispatchJSON -> onMessage
+    TEST_ASSERT_EQUAL_STRING("https:welcome", g_clientMsgLog.c_str());
+}
+
+void test_auto_ws_still_registers_for_default_and_explicit_ws() {
+    delete courier;
+    Config cfg;
+    cfg.host = "test.example.com";  // defaultTransport null
+    courier = new Client(cfg);
+    courier->setup();
+    courier->loop();
+    courier->loop();
+    courier->loop();
+    TEST_ASSERT_EQUAL(1, MockWebSocketClient::instanceCount());
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
 
@@ -447,6 +526,9 @@ int main(int argc, char** argv) {
     RUN_TEST(test_setEndpoint_copies_string_inputs);
     RUN_TEST(test_reconnect_transitions_through_reconnecting);
     RUN_TEST(test_dns_flush_on_transports_connecting_entry);
+    RUN_TEST(test_https_only_no_auto_ws_and_send_routes);
+    RUN_TEST(test_https_reply_reaches_client_onmessage);
+    RUN_TEST(test_auto_ws_still_registers_for_default_and_explicit_ws);
 
     return UNITY_END();
 }

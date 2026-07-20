@@ -468,6 +468,105 @@ void test_per_call_timeout_overrides_config() {
     TEST_ASSERT_EQUAL(2500, MockHttpClient::lastConfig().timeout_ms);
 }
 
+static std::string g_rawReply;
+static void rawReplyHook(const char* payload, size_t len) {
+    g_rawReply.assign(payload, len);
+}
+
+void test_send_posts_json_to_endpoint() {
+    http->setEndpoint("api.example.com", 443, "/inbox");
+    JsonDocument doc;
+    doc["type"] = "hello";
+    TEST_ASSERT_TRUE(http->send(doc));
+    auto* c = MockHttpClient::lastInstance();
+    TEST_ASSERT_EQUAL_STRING("https://api.example.com/inbox", c->url.c_str());
+    TEST_ASSERT_EQUAL(HTTP_METHOD_POST, MockHttpClient::lastConfig().method);
+    TEST_ASSERT_EQUAL_STRING("{\"type\":\"hello\"}", c->postBody.c_str());
+}
+
+void test_send_nondefault_port_in_url() {
+    http->setEndpoint("api.example.com", 8443, "/inbox");
+    JsonDocument doc;
+    doc["type"] = "hello";
+    http->send(doc);
+    TEST_ASSERT_EQUAL_STRING("https://api.example.com:8443/inbox",
+                             MockHttpClient::lastInstance()->url.c_str());
+}
+
+void test_send_json_reply_dispatches_on_loop() {
+    http->setEndpoint("api.example.com", 443, "/inbox");
+    http->onMessage(rawReplyHook);
+    g_rawReply.clear();
+
+    MockHttpClient::ScriptStep reply;
+    reply.status = 200;
+    reply.headers = {{"Content-Type", "application/json"}};
+    reply.bodyChunks = {"{\"type\":\"welcome\",\"room\":7}"};
+    MockHttpClient::pushScript(reply);
+
+    JsonDocument doc;
+    doc["type"] = "hello";
+    TEST_ASSERT_TRUE(http->send(doc));
+    TEST_ASSERT_EQUAL_STRING("", g_rawReply.c_str());  // not before loop()
+    http->loop();
+    TEST_ASSERT_EQUAL_STRING("{\"type\":\"welcome\",\"room\":7}",
+                             g_rawReply.c_str());
+}
+
+void test_send_non_json_reply_not_dispatched() {
+    http->setEndpoint("api.example.com", 443, "/inbox");
+    http->onMessage(rawReplyHook);
+    g_rawReply.clear();
+
+    MockHttpClient::ScriptStep reply;
+    reply.status = 200;
+    reply.headers = {{"Content-Type", "text/plain"}};
+    reply.bodyChunks = {"thanks"};
+    MockHttpClient::pushScript(reply);
+
+    JsonDocument doc;
+    doc["type"] = "hello";
+    TEST_ASSERT_TRUE(http->send(doc));
+    http->loop();
+    TEST_ASSERT_EQUAL_STRING("", g_rawReply.c_str());
+}
+
+void test_send_204_empty_reply_ok_no_dispatch() {
+    http->setEndpoint("api.example.com", 443, "/inbox");
+    http->onMessage(rawReplyHook);
+    g_rawReply.clear();
+
+    MockHttpClient::ScriptStep reply;
+    reply.status = 204;
+    reply.contentLength = 0;
+    MockHttpClient::pushScript(reply);
+
+    JsonDocument doc;
+    doc["type"] = "hello";
+    TEST_ASSERT_TRUE(http->send(doc));
+    http->loop();
+    TEST_ASSERT_EQUAL_STRING("", g_rawReply.c_str());
+}
+
+void test_send_fails_when_not_begun_or_no_host() {
+    JsonDocument doc;
+    doc["type"] = "hello";
+    HttpTransport fresh;             // never begun
+    TEST_ASSERT_FALSE(fresh.send(doc));
+    fresh.begin();                    // begun but no endpoint host
+    TEST_ASSERT_FALSE(fresh.send(doc));
+}
+
+void test_send_http_error_returns_false() {
+    http->setEndpoint("api.example.com", 443, "/inbox");
+    MockHttpClient::ScriptStep err;
+    err.status = 500;
+    MockHttpClient::pushScript(err);
+    JsonDocument doc;
+    doc["type"] = "hello";
+    TEST_ASSERT_FALSE(http->send(doc));
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_mock_scripted_response_fires_events);
@@ -503,5 +602,12 @@ int main(int argc, char** argv) {
     RUN_TEST(test_onconfigure_then_percall_layering);
     RUN_TEST(test_reserved_fields_survive_trapdoors);
     RUN_TEST(test_per_call_timeout_overrides_config);
+    RUN_TEST(test_send_posts_json_to_endpoint);
+    RUN_TEST(test_send_nondefault_port_in_url);
+    RUN_TEST(test_send_json_reply_dispatches_on_loop);
+    RUN_TEST(test_send_non_json_reply_not_dispatched);
+    RUN_TEST(test_send_204_empty_reply_ok_no_dispatch);
+    RUN_TEST(test_send_fails_when_not_begun_or_no_host);
+    RUN_TEST(test_send_http_error_returns_false);
     return UNITY_END();
 }

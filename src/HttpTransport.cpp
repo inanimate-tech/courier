@@ -327,9 +327,36 @@ Response HttpTransport::fetch(const char* url, const FetchOptions& opts)
 
 bool HttpTransport::send(JsonDocument& doc, const SendOptions& options)
 {
-    // Implemented in Task 8.
-    (void)doc; (void)options;
-    return false;
+    (void)options;  // topic/qos/retain are MQTT concepts — ignored (convention)
+    if (!isConnected()) return false;
+    if (_host.empty()) {
+        ESP_LOGW(TAG, "send: no endpoint host configured");
+        return false;
+    }
+
+    char url[288];
+    if (_port == 443 || _port == 0) {
+        snprintf(url, sizeof(url), "https://%s%s", _host.c_str(), _path.c_str());
+    } else {
+        snprintf(url, sizeof(url), "https://%s:%u%s", _host.c_str(),
+                 (unsigned)_port, _path.c_str());
+    }
+
+    FetchOptions opts;
+    opts.json = &doc;
+    Response r = fetch(url, opts);
+
+    if (r.ok() && r.size() > 0) {
+        const char* ct = r.header("Content-Type");
+        if (ct && strstr(ct, "json") != nullptr) {
+            // Hand the body buffer (heap-owned, NUL at [len]) to the rx
+            // queue zero-copy; drainPending dispatches and frees it.
+            size_t len = 0;
+            char* buf = r.releaseBody(&len);
+            if (buf) queueIncomingMessageOwned(buf, len);
+        }
+    }
+    return r.ok();
 }
 
 }  // namespace Courier
