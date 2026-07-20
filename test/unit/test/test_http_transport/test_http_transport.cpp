@@ -414,6 +414,60 @@ void test_streaming_head_only_fires_onresponse() {
     TEST_ASSERT_EQUAL_STRING("meta:204", g_streamEvents[0].c_str());
 }
 
+void test_config_defaults_bundle_and_timeout() {
+    http->fetch("https://example.com/x");
+    auto& cfg = MockHttpClient::lastConfig();
+    TEST_ASSERT_NOT_NULL((void*)cfg.crt_bundle_attach);  // bundle default
+    TEST_ASSERT_NULL(cfg.cert_pem);
+    TEST_ASSERT_EQUAL(10000, cfg.timeout_ms);
+}
+
+void test_config_cert_pem_overrides_bundle() {
+    HttpTransport::Config c;
+    c.cert_pem = "-----BEGIN CERTIFICATE-----FAKE";
+    HttpTransport pinned(c);
+    pinned.begin();
+    pinned.fetch("https://example.com/x");
+    auto& cfg = MockHttpClient::lastConfig();
+    TEST_ASSERT_EQUAL_STRING("-----BEGIN CERTIFICATE-----FAKE", cfg.cert_pem);
+    TEST_ASSERT_NULL((void*)cfg.crt_bundle_attach);
+}
+
+void test_onconfigure_then_percall_layering() {
+    http->onConfigure([](esp_http_client_config_t& cfg) {
+        cfg.buffer_size = 1111;
+        cfg.buffer_size_tx = 2222;
+    });
+    HttpTransport::FetchOptions opts;
+    opts.configure = [](esp_http_client_config_t& cfg) {
+        cfg.buffer_size = 3333;  // per-call wins over transport hook
+    };
+    http->fetch("https://example.com/x", opts);
+    auto& cfg = MockHttpClient::lastConfig();
+    TEST_ASSERT_EQUAL(3333, cfg.buffer_size);
+    TEST_ASSERT_EQUAL(2222, cfg.buffer_size_tx);
+}
+
+void test_reserved_fields_survive_trapdoors() {
+    http->onConfigure([](esp_http_client_config_t& cfg) {
+        cfg.event_handler = nullptr;  // hostile hook tries to sever plumbing
+        cfg.user_data = nullptr;
+    });
+    MockHttpClient::ScriptStep step;
+    step.bodyChunks = {"still-works"};
+    MockHttpClient::pushScript(step);
+    Response r = http->fetch("https://example.com/x");
+    TEST_ASSERT_EQUAL_STRING("still-works", r.text());  // plumbing intact
+    http->onConfigure(nullptr);
+}
+
+void test_per_call_timeout_overrides_config() {
+    HttpTransport::FetchOptions opts;
+    opts.timeoutMs = 2500;
+    http->fetch("https://example.com/x", opts);
+    TEST_ASSERT_EQUAL(2500, MockHttpClient::lastConfig().timeout_ms);
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_mock_scripted_response_fires_events);
@@ -444,5 +498,10 @@ int main(int argc, char** argv) {
     RUN_TEST(test_streaming_abort_stops_and_reports);
     RUN_TEST(test_streaming_drop_mid_body_no_retry_keeps_status);
     RUN_TEST(test_streaming_head_only_fires_onresponse);
+    RUN_TEST(test_config_defaults_bundle_and_timeout);
+    RUN_TEST(test_config_cert_pem_overrides_bundle);
+    RUN_TEST(test_onconfigure_then_percall_layering);
+    RUN_TEST(test_reserved_fields_survive_trapdoors);
+    RUN_TEST(test_per_call_timeout_overrides_config);
     return UNITY_END();
 }
