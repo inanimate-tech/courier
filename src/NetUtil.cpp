@@ -26,6 +26,11 @@ void setSystemClock(time_t epoch)
     settimeofday(&tv, nullptr);
 }
 
+time_t getSystemClock()
+{
+    return time(nullptr);
+}
+
 #else
 
 int dnsFlushCountForTests = 0;
@@ -33,6 +38,7 @@ time_t systemClockForTests = 0;
 
 void flushDnsCache() { dnsFlushCountForTests++; }
 void setSystemClock(time_t epoch) { systemClockForTests = epoch; }
+time_t getSystemClock() { return systemClockForTests; }
 
 #endif
 

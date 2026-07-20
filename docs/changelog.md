@@ -2,7 +2,23 @@
 
 ## v0.4.3-dev
 
-Theme: receive-path memory — larger messages on no-PSRAM boards.
+Theme: receive-path memory — larger messages on no-PSRAM boards; `HttpTransport` hardening.
+
+### New
+
+- **`HttpTransport`** — opt-in HTTPS transport (blocking `fetch()`, buffered or streaming) that also participates as a full transport citizen via `send()`/`onMessage`. The existing auto-`"ws"` registration rule is unchanged (`Config::host` set AND `defaultTransport` is `"ws"`/unset) — set `defaultTransport = "https"` to skip the built-in `"ws"` and use `HttpTransport` instead. See the README's HTTPS section.
+
+### Upgrading notes
+
+- **Binary size.** `esp_http_client` and the IDF certificate bundle are now always linked in (Courier's time-sync bootstrap depends on them), adding roughly +80-100KB to firmware binary size even for projects that never construct an `HttpTransport`.
+- **`settimeofday` now set by Courier.** `Client::syncTimeFromHttpDate()` calls `setSystemClock()` (`settimeofday`) in addition to ezTime's `UTC.setTime()` — previously only ezTime's virtual clock was set from the HTTP Date header, so the system clock (which mbedTLS/TLS cert validation reads) stayed at its boot default until NTP arrived. `Client::loop()`'s NTP bridge now also re-fires whenever ezTime and the system clock diverge by more than 5s (previously a one-shot latch), so a later genuine NTP correction can repair a poisoned or drifted system clock.
+
+### Fixes
+
+- **Time-bootstrap redirect trap.** The HTTP Date-header probe (`syncTimeFromHttpDate`) now sets `disable_auto_redirect` so a 301 on the plain-HTTP leg is treated as the response (Date header captured) instead of being silently followed into a cold-clock TLS handshake that fails and discards the Date. Both legs are now capped at a 5s timeout with no retries, bounding the worst-case blocked time during bootstrap.
+- **Clock-forward plausibility ceiling.** `syncTimeFromHttpDate` now rejects Date headers more than 10 years past the firmware build date (alongside the existing floor that rejects dates before the build), guarding against a MITM setting the clock implausibly far forward on the unauthenticated bootstrap leg.
+- **Redirects corrupting buffered/streaming `fetch()` responses.** `HttpTransport::eventHandler` now resets accumulated body/headers when a new hop's headers arrive after a previous hop's response had already been latched, and never accumulates or streams a 3xx hop's body. Previously an intermediate redirect with its own body could latch the wrong status and concatenate the redirect body with the final response's body.
+- **`HttpTransport::send()`** no longer dispatches a truncated (`!complete()`) JSON reply to `onMessage` — `send()` still reports `ok()` (e.g. `true` for a 2xx that got cut short), but truncated JSON never reaches the raw hook.
 
 ### Improved
 

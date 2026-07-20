@@ -489,8 +489,22 @@ void test_https_reply_reaches_client_onmessage() {
 void test_auto_ws_still_registers_for_default_and_explicit_ws() {
     delete courier;
     Config cfg;
-    cfg.host = "test.example.com";  // defaultTransport null
+    cfg.host = "test.example.com";  // defaultTransport null -> defaults to "ws"
     courier = new Client(cfg);
+    courier->setup();
+    courier->loop();
+    courier->loop();
+    courier->loop();
+    TEST_ASSERT_EQUAL(1, MockWebSocketClient::instanceCount());
+
+    // Explicit defaultTransport = "ws" must also auto-register (not just the
+    // null/unset case above).
+    delete courier;
+    MockWebSocketClient::resetInstanceCount();
+    Config cfg2;
+    cfg2.host = "test.example.com";
+    cfg2.defaultTransport = "ws";
+    courier = new Client(cfg2);
     courier->setup();
     courier->loop();
     courier->loop();
@@ -500,29 +514,62 @@ void test_auto_ws_still_registers_for_default_and_explicit_ws() {
 
 void test_time_sync_sets_system_clock_from_date_header() {
     advanceToConnected();
-    // Default mock Date: Tue, 01 Jan 2099 12:00:00 GMT == 4070952000. Kept
-    // far in the future (rather than a fixed near-term date) so this test
-    // isn't time-bombed by the buildEpoch() floor as real wall-clock time
-    // advances past whatever date the test suite was authored on.
-    TEST_ASSERT_EQUAL(4070952000, (long)Courier::systemClockForTests);
+    // Default mock Date: Fri, 01 Jan 2027 12:00:00 GMT == 1798804800
+    // (verified via python3's calendar.timegm). Near-future rather than a
+    // date decades out, so it also stays under the 10-year plausibility
+    // ceiling in Client::syncTimeFromHttpDate() while still clearing the
+    // buildEpoch() floor as real wall-clock time advances.
+    TEST_ASSERT_EQUAL(1798804800, (long)Courier::systemClockForTests);
+}
+
+void test_time_sync_probe_disables_redirect_and_bounds_timeout() {
+    advanceToConnected();
+    // syncTimeFromHttpDate's probe must not silently follow a redirect into
+    // a cold-clock TLS handshake, and must not block the state machine for
+    // long: 5s timeout, no retries.
+    auto& cfg = MockHttpClient::lastConfig();
+    TEST_ASSERT_TRUE(cfg.disable_auto_redirect);
+    TEST_ASSERT_EQUAL(5000, cfg.timeout_ms);
+}
+
+void test_time_sync_301_response_still_sets_clock() {
+    MockHttpClient::ScriptStep redirect;
+    redirect.status = 301;  // the probe's 301 IS the final response (no follow)
+    redirect.headers = {{"Location", "https://test.example.com/"},
+                        {"Date", "Fri, 01 Jan 2027 12:00:00 GMT"}};
+    MockHttpClient::pushScript(redirect);
+
+    advanceToConnected();
+
+    TEST_ASSERT_EQUAL(1798804800, (long)Courier::systemClockForTests);
 }
 
 void test_time_sync_rejects_date_before_build() {
     MockHttpClient::ScriptStep old;
     old.status = 200;
     old.headers = {{"Date", "Mon, 01 Jan 2001 00:00:00 GMT"}};
-    MockHttpClient::pushScript(old);  // http:// attempt
-    MockHttpClient::pushScript(old);  // https:// fallback attempt
+    // http:// attempt succeeds with a Date, so no https:// fallback is ever
+    // attempted — the buildEpoch() floor rejects it afterward.
+    MockHttpClient::pushScript(old);
     advanceToConnected();
     TEST_ASSERT_EQUAL(0, (long)Courier::systemClockForTests);
 }
 
-void test_ntp_bridge_sets_system_clock_once() {
+void test_time_sync_rejects_date_too_far_in_future() {
+    MockHttpClient::ScriptStep farFuture;
+    farFuture.status = 200;
+    farFuture.headers = {{"Date", "Tue, 01 Jan 2099 12:00:00 GMT"}};
+    MockHttpClient::pushScript(farFuture);  // http:// attempt only
+    advanceToConnected();
+    TEST_ASSERT_EQUAL(0, (long)Courier::systemClockForTests);
+}
+
+void test_ntp_bridge_rebridges_on_divergence() {
     g_mockTimeStatus = timeNotSet;   // suppress bridge during connect
     MockHttpClient::ScriptStep noDate;
     noDate.status = 200;             // Date-less responses: HTTP sync fails
-    MockHttpClient::pushScript(noDate);
-    MockHttpClient::pushScript(noDate);
+    MockHttpClient::pushScript(noDate);  // http:// attempt
+    MockHttpClient::pushScript(noDate);  // https:// fallback attempt
     advanceToConnected();
     TEST_ASSERT_EQUAL(0, (long)Courier::systemClockForTests);
 
@@ -532,10 +579,16 @@ void test_ntp_bridge_sets_system_clock_once() {
     courier->loop();
     TEST_ASSERT_EQUAL(1771416000, (long)Courier::systemClockForTests);
 
-    // Bridge fires once — later drift corrections stay inside ezTime.
-    UTC.setMockNow((time_t)1771417000);
+    // Small divergence (drift ezTime already smooths) — left alone.
+    UTC.setMockNow((time_t)1771416003);
     courier->loop();
     TEST_ASSERT_EQUAL(1771416000, (long)Courier::systemClockForTests);
+
+    // Large divergence (e.g. system clock drifted, or was poisoned by a bad
+    // Date header) — a genuine NTP correction re-bridges to repair it.
+    UTC.setMockNow((time_t)1771417000);
+    courier->loop();
+    TEST_ASSERT_EQUAL(1771417000, (long)Courier::systemClockForTests);
 }
 
 int main(int argc, char** argv) {
@@ -570,8 +623,11 @@ int main(int argc, char** argv) {
     RUN_TEST(test_https_reply_reaches_client_onmessage);
     RUN_TEST(test_auto_ws_still_registers_for_default_and_explicit_ws);
     RUN_TEST(test_time_sync_sets_system_clock_from_date_header);
+    RUN_TEST(test_time_sync_probe_disables_redirect_and_bounds_timeout);
+    RUN_TEST(test_time_sync_301_response_still_sets_clock);
     RUN_TEST(test_time_sync_rejects_date_before_build);
-    RUN_TEST(test_ntp_bridge_sets_system_clock_once);
+    RUN_TEST(test_time_sync_rejects_date_too_far_in_future);
+    RUN_TEST(test_ntp_bridge_rebridges_on_divergence);
 
     return UNITY_END();
 }

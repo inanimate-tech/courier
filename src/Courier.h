@@ -184,7 +184,6 @@ private:
   // Time sync
   bool syncTimeFromHttpDate();
   bool _timeSyncAttempted = false;
-  bool _systemClockBridged = false;
 
   // JSON dispatch — wired via Transport::setClientHook in attachTransport.
   void dispatchJSON(const char* transportName, const char* payload, size_t length);

@@ -97,13 +97,6 @@ void test_connected_tracks_begin_and_wifi() {
     TEST_ASSERT_FALSE(http->isConnected());
 }
 
-void test_endpoint_seeding_via_base() {
-    // Client::addTransport seeds via setEndpoint; verify base storage works.
-    http->setEndpoint("api.example.com", 8443, "/inbox");
-    // No getter on purpose — exercised for real in the send() tests (Task 8).
-    TEST_ASSERT_TRUE(true);
-}
-
 void test_fetch_buffered_happy_path() {
     MockHttpClient::ScriptStep step;
     step.status = 200;
@@ -209,6 +202,84 @@ void test_fetch_truncated_body_flags_incomplete() {
     TEST_ASSERT_EQUAL(200, r.status);
     TEST_ASSERT_FALSE(r.complete());
     TEST_ASSERT_EQUAL_STRING("shrt", r.text());
+}
+
+void test_fetch_buffered_redirect_delivers_only_final_hop() {
+    MockHttpClient::ScriptStep step;
+    // Hop 1: the 301 has its own small (redirect-page) body — this is the
+    // shape that used to corrupt the buffered Response (status latched from
+    // this hop, body concatenated with hop 2's).
+    MockHttpClient::Hop hop1;
+    hop1.status = 301;
+    hop1.headers = {{"Content-Type", "text/html"},
+                    {"Date", "Tue, 18 Feb 2026 12:00:00 GMT"},
+                    {"Location", "https://example.com/final"}};
+    hop1.bodyChunks = {"<html>redirecting</html>"};
+    step.redirectHops = {hop1};
+    // Hop 2 (final): the ScriptStep's own fields.
+    step.status = 200;
+    step.headers = {{"Content-Type", "application/json"},
+                    {"Date", "Tue, 18 Feb 2026 12:05:00 GMT"}};
+    step.bodyChunks = {"{\"ok\":true}"};
+    MockHttpClient::pushScript(step);
+
+    Response r = http->fetch("https://example.com/start");
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_TRUE(r.ok());
+    TEST_ASSERT_TRUE(r.complete());
+    TEST_ASSERT_EQUAL_STRING("{\"ok\":true}", r.text());  // hop1's body absent
+    TEST_ASSERT_EQUAL_STRING("application/json", r.header("Content-Type"));
+    TEST_ASSERT_EQUAL_STRING("Tue, 18 Feb 2026 12:05:00 GMT", r.header("Date"));
+}
+
+void test_streaming_redirect_delivers_only_final_hop_chunks() {
+    MockHttpClient::ScriptStep step;
+    MockHttpClient::Hop hop1;
+    hop1.status = 301;
+    hop1.headers = {{"Date", "Tue, 18 Feb 2026 12:00:00 GMT"}};
+    hop1.bodyChunks = {"nope"};
+    step.redirectHops = {hop1};
+    step.status = 200;
+    step.contentLength = 6;
+    step.headers = {{"Content-Type", "application/octet-stream"}};
+    step.bodyChunks = {"abc", "def"};
+    MockHttpClient::pushScript(step);
+
+    g_streamed.clear();
+    g_streamEvents.clear();
+    HttpTransport::FetchOptions opts;
+    opts.onResponse = [](int status, long len) {
+        g_streamEvents.push_back("meta:" + std::to_string(status));
+    };
+    opts.onBody = [](const uint8_t* d, size_t n) {
+        g_streamed.append((const char*)d, n);
+        return true;
+    };
+    Response r = http->fetch("https://example.com/fw.bin", opts);
+
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_EQUAL(1, (int)g_streamEvents.size());  // onResponse fires once
+    TEST_ASSERT_EQUAL_STRING("meta:200", g_streamEvents[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("abcdef", g_streamed.c_str());  // hop1's "nope" absent
+}
+
+void test_fetch_final_redirect_not_followed_has_no_body() {
+    MockHttpClient::ScriptStep step;
+    step.status = 301;
+    step.headers = {{"Date", "Tue, 18 Feb 2026 12:00:00 GMT"},
+                    {"Location", "https://example.com/final"}};
+    MockHttpClient::pushScript(step);
+
+    HttpTransport::FetchOptions opts;
+    opts.configure = [](esp_http_client_config_t& cfg) {
+        cfg.disable_auto_redirect = true;
+    };
+    Response r = http->fetch("https://example.com/start", opts);
+    TEST_ASSERT_EQUAL(301, r.status);
+    TEST_ASSERT_TRUE(r.reachedServer());
+    TEST_ASSERT_TRUE(r.complete());
+    TEST_ASSERT_EQUAL_STRING("", r.text());
+    TEST_ASSERT_EQUAL_STRING("Tue, 18 Feb 2026 12:00:00 GMT", r.header("Date"));
 }
 
 void test_fetch_no_wifi_short_circuits() {
@@ -548,6 +619,27 @@ void test_send_204_empty_reply_ok_no_dispatch() {
     TEST_ASSERT_EQUAL_STRING("", g_rawReply.c_str());
 }
 
+void test_send_truncated_json_reply_not_dispatched() {
+    http->setEndpoint("api.example.com", 443, "/inbox");
+    http->onMessage(rawReplyHook);
+    g_rawReply.clear();
+
+    MockHttpClient::ScriptStep reply;
+    reply.status = 200;
+    reply.contentLength = 1000;  // promises more than delivered
+    reply.headers = {{"Content-Type", "application/json"}};
+    reply.bodyChunks = {"{\"type\":\"welcome\"}"};
+    MockHttpClient::pushScript(reply);
+
+    JsonDocument doc;
+    doc["type"] = "hello";
+    // r.ok() is true (200) even though r.complete() is false — send() still
+    // reports success, it just must not hand a truncated body to onMessage.
+    TEST_ASSERT_TRUE(http->send(doc));
+    http->loop();
+    TEST_ASSERT_EQUAL_STRING("", g_rawReply.c_str());
+}
+
 void test_send_fails_when_not_begun_or_no_host() {
     JsonDocument doc;
     doc["type"] = "hello";
@@ -574,7 +666,6 @@ int main(int argc, char** argv) {
     RUN_TEST(test_name_is_http);
     RUN_TEST(test_not_persistent);
     RUN_TEST(test_connected_tracks_begin_and_wifi);
-    RUN_TEST(test_endpoint_seeding_via_base);
     RUN_TEST(test_fetch_buffered_happy_path);
     RUN_TEST(test_fetch_default_method_is_get_and_url_passed);
     RUN_TEST(test_fetch_body_implies_post_and_sets_post_field);
@@ -583,6 +674,9 @@ int main(int argc, char** argv) {
     RUN_TEST(test_postjson_sugar);
     RUN_TEST(test_fetch_head_response_no_body);
     RUN_TEST(test_fetch_truncated_body_flags_incomplete);
+    RUN_TEST(test_fetch_buffered_redirect_delivers_only_final_hop);
+    RUN_TEST(test_streaming_redirect_delivers_only_final_hop_chunks);
+    RUN_TEST(test_fetch_final_redirect_not_followed_has_no_body);
     RUN_TEST(test_fetch_no_wifi_short_circuits);
     RUN_TEST(test_fetch_client_cleaned_up_per_request);
     RUN_TEST(test_response_move_semantics);
@@ -607,6 +701,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_send_json_reply_dispatches_on_loop);
     RUN_TEST(test_send_non_json_reply_not_dispatched);
     RUN_TEST(test_send_204_empty_reply_ok_no_dispatch);
+    RUN_TEST(test_send_truncated_json_reply_not_dispatched);
     RUN_TEST(test_send_fails_when_not_begun_or_no_host);
     RUN_TEST(test_send_http_error_returns_false);
     return UNITY_END();

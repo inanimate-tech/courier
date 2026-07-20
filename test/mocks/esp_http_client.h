@@ -76,12 +76,23 @@ inline esp_err_t esp_crt_bundle_attach(void*) { return ESP_OK; }
 
 class MockHttpClient {
 public:
+    // A single intermediate redirect hop fired before the ScriptStep's own
+    // (final) status/headers/body — models esp_http_client internally
+    // following a 3xx and re-invoking the event handler for the next hop
+    // within the same perform() call.
+    struct Hop {
+        int status = 301;
+        std::vector<std::pair<std::string, std::string>> headers;
+        std::vector<std::string> bodyChunks;
+    };
+
     struct ScriptStep {
         esp_err_t performResult;
         int status;
         long contentLength;  // -2 = derive from total chunk bytes
         std::vector<std::pair<std::string, std::string>> headers;
         std::vector<std::string> bodyChunks;
+        std::vector<Hop> redirectHops;  // fired, in order, before this step
 
         ScriptStep() : performResult(ESP_OK), status(200), contentLength(-2) {}
     };
@@ -114,6 +125,19 @@ public:
             return step.performResult;
         }
 
+        for (auto& hop : step.redirectHops) {
+            currentStatus = hop.status;
+            size_t hopTotal = 0;
+            for (auto& c : hop.bodyChunks) hopTotal += c.size();
+            currentContentLength = (long)hopTotal;
+            for (auto& h : hop.headers) fireHeader(h.first.c_str(), h.second.c_str());
+            for (auto& c : hop.bodyChunks) {
+                if (closed) break;
+                fireData(c.data(), c.size());
+            }
+            if (closed) return ESP_FAIL;
+        }
+
         currentStatus = step.status;
         size_t total = 0;
         for (auto& c : step.bodyChunks) total += c.size();
@@ -139,11 +163,13 @@ public:
         s_lastInstance = nullptr;
         s_lastConfig = {};
         s_defaultStep = ScriptStep{};
-        // Far-future date so it always clears the buildEpoch() floor in
-        // Client::syncTimeFromHttpDate(), regardless of when tests actually
-        // run (buildEpoch() reflects the real compile-time clock).
+        // Near-future date (epoch 1798804800 - verified via python3) so it
+        // clears the buildEpoch() floor in Client::syncTimeFromHttpDate()
+        // regardless of when tests actually run (buildEpoch() reflects the
+        // real compile-time clock), while staying well under the 10-year
+        // plausibility ceiling added alongside that floor.
         s_defaultStep.headers = {{"Content-Type", "application/json"},
-                                 {"Date", "Tue, 01 Jan 2099 12:00:00 GMT"}};
+                                 {"Date", "Fri, 01 Jan 2027 12:00:00 GMT"}};
         s_defaultStep.bodyChunks = {"{}"};
     }
 

@@ -16,6 +16,11 @@ void flushDnsCache();
 // validation permanently broken (poem-firmware's root-cause finding).
 void setSystemClock(time_t epoch);
 
+// Read the *system* clock: time(nullptr) on device, the native test seam
+// (systemClockForTests) off-device. Used to detect drift/poisoning between
+// the system clock and ezTime's UTC.now() so Client::loop() can re-bridge.
+time_t getSystemClock();
+
 // Parse an RFC 7231 HTTP Date header, e.g. "Tue, 18 Feb 2026 12:00:00 GMT".
 // Returns the UTC epoch, or 0 on parse failure.
 time_t parseHttpDateToEpoch(const char* dateHeader);

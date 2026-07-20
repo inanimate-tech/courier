@@ -30,6 +30,9 @@ Client::Client(const Config& config)
                      strcmp(_config.defaultTransport, "ws") == 0;
   if (wsIsDefault && _config.host && _config.host[0] != '\0') {
     addTransport<WebSocketTransport>("ws");
+  } else if (_config.host && _config.host[0] != '\0') {
+    Serial.printf("[courier] host set but defaultTransport is \"%s\" - not "
+                  "auto-registering \"ws\"\n", _config.defaultTransport);
   }
 }
 
@@ -75,15 +78,22 @@ void Client::loop()
   // when NTP hasn't resolved yet.
   events();
 
-  // Bridge ezTime -> system clock once NTP has synced: mbedTLS validates
+  // Bridge ezTime -> system clock whenever NTP has synced and diverges from
+  // the system clock by more than a few seconds: mbedTLS validates
   // certificate dates against the system clock (settimeofday), which
-  // ezTime's own sync never touches. Without this, TLS validation can stay
-  // broken forever on devices that only ever sync via NTP.
-  if (!_systemClockBridged && timeStatus() == timeSet) {
+  // ezTime's own sync never touches. Re-checking (rather than a one-shot
+  // latch) means a genuine NTP correction can repair a system clock that was
+  // never bridged, poisoned by a bad HTTP Date, or has simply drifted -
+  // small ongoing differences are left alone so this doesn't fight ezTime's
+  // own continuous drift correction on every loop() call.
+  if (timeStatus() == timeSet) {
     time_t nowUtc = UTC.now();
     if (nowUtc > 0) {
-      setSystemClock(nowUtc);
-      _systemClockBridged = true;
+      time_t sysClock = getSystemClock();
+      time_t divergence = nowUtc > sysClock ? nowUtc - sysClock : sysClock - nowUtc;
+      if (divergence > 5) {
+        setSystemClock(nowUtc);
+      }
     }
   }
 
@@ -398,9 +408,14 @@ void Client::staticWifiFailedCallback(WiFiManager* wm)
 // TLS certificate validation needs a roughly-correct clock, but this IS the
 // clock source on cold boot. So: plain HTTP (port 80) first — any response,
 // even a redirect, carries a Date header — then HTTPS with the cert bundle
-// (succeeds when the RTC is already warm). The build-epoch floor rejects
-// clock-rollback on the unauthenticated leg. NTP (ezTime events() in loop())
-// remains the primary ongoing time source.
+// (succeeds when the RTC is already warm). disable_auto_redirect keeps a 301
+// on the http:// leg from being silently followed into TLS with a cold
+// clock (which would fail cert validation and discard the very Date header
+// this probe exists to capture) — the 301 itself is the response we want.
+// The build-epoch floor (and a plausibility ceiling) rejects clock
+// manipulation on this unauthenticated leg. Both legs are capped at 5s with
+// no retries: NTP (ezTime events() in loop()) is the primary ongoing time
+// source, so this probe must not block the state machine for long.
 
 bool Client::syncTimeFromHttpDate()
 {
@@ -408,12 +423,25 @@ bool Client::syncTimeFromHttpDate()
   http.begin();
   HttpTransport::FetchOptions opts;
   opts.method = "HEAD";
+  opts.timeoutMs = 5000;
+  opts.retries = 0;
+  opts.configure = [](esp_http_client_config_t& c) {
+    c.disable_auto_redirect = true;
+  };
 
   char url[192];
-  snprintf(url, sizeof(url), "http://%s/", _config.host);
+  int n = snprintf(url, sizeof(url), "http://%s/", _config.host);
+  if (n < 0 || (size_t)n >= sizeof(url)) {
+    Serial.println("[courier] time sync: host too long for URL buffer - skipping http:// leg");
+    return false;
+  }
   Response r = http.fetch(url, opts);
   if (!r.reachedServer() || !r.header("Date")) {
-    snprintf(url, sizeof(url), "https://%s/", _config.host);
+    n = snprintf(url, sizeof(url), "https://%s/", _config.host);
+    if (n < 0 || (size_t)n >= sizeof(url)) {
+      Serial.println("[courier] time sync: host too long for URL buffer - skipping https:// leg");
+      return false;
+    }
     r = http.fetch(url, opts);
   }
   if (!r.reachedServer()) {
@@ -435,6 +463,11 @@ bool Client::syncTimeFromHttpDate()
   }
   if (epoch < buildEpoch()) {
     Serial.println("[courier] Date header predates firmware build - rejecting");
+    return false;
+  }
+  time_t ceiling = buildEpoch() + (time_t)(10 * 365 * 86400);  // 10 years
+  if (epoch > ceiling) {
+    Serial.println("[courier] Date header implausibly far in the future - rejecting");
     return false;
   }
 

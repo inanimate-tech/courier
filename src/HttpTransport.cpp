@@ -104,6 +104,18 @@ void Response::captureHeader(const char* key, const char* value)
     else if (strcasecmp(key, "Date") == 0) _date = value;
 }
 
+void Response::resetForNewHop()
+{
+    if (_body) free(_body);
+    _body = nullptr;
+    _size = 0;
+    _alloc = 0;
+    _complete = true;
+    _contentType.clear();
+    _contentLengthStr.clear();
+    _date.clear();
+}
+
 char* Response::releaseBody(size_t* outLen)
 {
     char* b = _body;
@@ -154,18 +166,38 @@ esp_err_t HttpTransport::eventHandler(esp_http_client_event_t* evt)
 
     switch (evt->event_id) {
     case HTTP_EVENT_ON_HEADER:
+        if (ctx->responseFired || ctx->sawBody) {
+            // Headers arriving after we'd already latched a response for a
+            // previous hop means esp_http_client just followed a redirect
+            // (the prior hop's body — e.g. a redirect page — had data of its
+            // own). Discard that hop's accumulated body/headers so they
+            // don't bleed into (or concatenate with) the new hop's response.
+            ctx->resp->resetForNewHop();
+            ctx->responseFired = false;
+            ctx->sawBody = false;
+        }
         ctx->resp->captureHeader(evt->header_key, evt->header_value);
         break;
 
     case HTTP_EVENT_ON_DATA: {
+        int status = esp_http_client_get_status_code(ctx->client);
+        bool isRedirectHop = status >= 300 && status < 400;
         if (!ctx->responseFired) {
             ctx->responseFired = true;
-            ctx->resp->status = esp_http_client_get_status_code(ctx->client);
+            ctx->resp->status = status;
             ctx->resp->contentLength =
                 (long)esp_http_client_get_content_length(ctx->client);
-            if (ctx->streaming && ctx->opts->onResponse) {
+            if (ctx->streaming && !isRedirectHop && ctx->opts->onResponse) {
                 ctx->opts->onResponse(ctx->resp->status, ctx->resp->contentLength);
             }
+        }
+        if (isRedirectHop) {
+            // A 3xx response's body (if any) isn't payload — status/headers
+            // are already captured (above and in ON_HEADER); never accumulate
+            // or stream it. This applies equally to an intermediate redirect
+            // hop and to a *final* 3xx (disable_auto_redirect) — either way
+            // the caller sees status + headers + an empty body.
+            break;
         }
         ctx->sawBody = true;
         if (ctx->streaming) {
@@ -341,18 +373,26 @@ bool HttpTransport::send(JsonDocument& doc, const SendOptions& options)
     }
 
     char url[288];
+    int n;
     if (_port == 443 || _port == 0) {
-        snprintf(url, sizeof(url), "https://%s%s", _host.c_str(), _path.c_str());
+        n = snprintf(url, sizeof(url), "https://%s%s", _host.c_str(), _path.c_str());
     } else {
-        snprintf(url, sizeof(url), "https://%s:%u%s", _host.c_str(),
-                 (unsigned)_port, _path.c_str());
+        n = snprintf(url, sizeof(url), "https://%s:%u%s", _host.c_str(),
+                     (unsigned)_port, _path.c_str());
+    }
+    if (n < 0 || (size_t)n >= sizeof(url)) {
+        ESP_LOGW(TAG, "send: url truncated (host/path too long), aborting");
+        return false;
     }
 
     FetchOptions opts;
     opts.json = &doc;
     Response r = fetch(url, opts);
 
-    if (r.ok() && r.size() > 0) {
+    // Truncated JSON must never reach the raw hook — only dispatch a
+    // complete body, even though a truncated-but-2xx response still counts
+    // as ok() (and is still returned to the caller as such).
+    if (r.ok() && r.complete() && r.size() > 0) {
         const char* ct = r.header("Content-Type");
         if (ct && strstr(ct, "json") != nullptr) {
             // Hand the body buffer (heap-owned, NUL at [len]) to the rx

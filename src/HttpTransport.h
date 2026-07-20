@@ -73,6 +73,9 @@ private:
     bool appendBody(const char* data, size_t len, size_t cap);
     void captureHeader(const char* key, const char* value);
     char* releaseBody(size_t* outLen);  // hand buffer ownership to the caller
+    // Discard accumulated body/headers when a new redirect hop's headers
+    // start arriving mid-perform() — see HttpTransport::eventHandler.
+    void resetForNewHop();
 };
 
 // HTTPS transport wrapping esp_http_client. Blocking, JS-shaped fetch();
@@ -123,6 +126,8 @@ public:
     // Two overloads instead of `opts = {}`: Apple Clang rejects a defaulted
     // FetchOptions argument inside the enclosing class definition ("default
     // member initializer needed within definition of enclosing class").
+    // Safe to call from loop()-dispatched callbacks (single task); long
+    // fetches stall other transports' draining.
     Response fetch(const char* url);
     Response fetch(const char* url, const FetchOptions& opts);
     Response get(const char* url) { return fetch(url); }
