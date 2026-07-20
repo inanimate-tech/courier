@@ -6,12 +6,15 @@
 #include <ArduinoJson.h>
 #include <cstring>
 #include <string>
+#include <vector>
 
 using namespace Courier;
 
 static HttpTransport* http = nullptr;
 static std::string g_headerLog;
 static std::string g_dataLog;
+static std::string g_streamed;
+static std::vector<std::string> g_streamEvents;
 
 static esp_err_t smokeHandler(esp_http_client_event_t* evt) {
     if (evt->event_id == HTTP_EVENT_ON_HEADER) {
@@ -325,6 +328,92 @@ void test_too_large_response_never_retries() {
     TEST_ASSERT_EQUAL(0, dnsFlushCountForTests);
 }
 
+void test_streaming_onresponse_before_chunks() {
+    MockHttpClient::ScriptStep step;
+    step.status = 200;
+    step.contentLength = 6;
+    step.bodyChunks = {"abc", "def"};
+    MockHttpClient::pushScript(step);
+
+    g_streamed.clear();
+    g_streamEvents.clear();
+    HttpTransport::FetchOptions opts;
+    opts.onResponse = [](int status, long len) {
+        g_streamEvents.push_back("meta:" + std::to_string(status) + ":" +
+                                 std::to_string(len));
+    };
+    opts.onBody = [](const uint8_t* d, size_t n) {
+        g_streamEvents.push_back("chunk");
+        g_streamed.append((const char*)d, n);
+        return true;
+    };
+    Response r = http->fetch("https://example.com/fw.bin", opts);
+
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_EQUAL(3, (int)g_streamEvents.size());
+    TEST_ASSERT_EQUAL_STRING("meta:200:6", g_streamEvents[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("chunk", g_streamEvents[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("abcdef", g_streamed.c_str());
+    TEST_ASSERT_EQUAL(0, (int)r.size());          // nothing buffered
+    TEST_ASSERT_EQUAL_STRING("", r.text());
+}
+
+void test_streaming_abort_stops_and_reports() {
+    MockHttpClient::ScriptStep step;
+    step.status = 200;
+    step.bodyChunks = {"abc", "def", "ghi"};
+    MockHttpClient::pushScript(step);
+
+    g_streamed.clear();
+    HttpTransport::FetchOptions opts;
+    opts.onBody = [](const uint8_t* d, size_t n) {
+        g_streamed.append((const char*)d, n);
+        return g_streamed.size() < 4;  // abort after the second chunk
+    };
+    Response r = http->fetch("https://example.com/fw.bin", opts);
+    TEST_ASSERT_EQUAL(Http::ErrAborted, r.status);
+    TEST_ASSERT_EQUAL_STRING("abcdef", g_streamed.c_str());  // 3rd chunk never came
+    TEST_ASSERT_EQUAL(1, MockHttpClient::performCount());    // no retry on abort
+}
+
+void test_streaming_drop_mid_body_no_retry_keeps_status() {
+    MockHttpClient::ScriptStep step;
+    step.performResult = ESP_FAIL;   // connection dies after chunks delivered
+    step.status = 200;
+    step.contentLength = 100;
+    step.bodyChunks = {"abc"};
+    MockHttpClient::pushScript(step);
+
+    g_streamed.clear();
+    HttpTransport::FetchOptions opts;
+    opts.onBody = [](const uint8_t* d, size_t n) {
+        g_streamed.append((const char*)d, n);
+        return true;
+    };
+    Response r = http->fetch("https://example.com/fw.bin", opts);
+    TEST_ASSERT_EQUAL(200, r.status);       // reached server: status stands...
+    TEST_ASSERT_FALSE(r.complete());        // ...but flagged incomplete
+    TEST_ASSERT_EQUAL(1, MockHttpClient::performCount());  // chunks delivered => no retry
+}
+
+void test_streaming_head_only_fires_onresponse() {
+    MockHttpClient::ScriptStep step;
+    step.status = 204;
+    step.contentLength = 0;
+    MockHttpClient::pushScript(step);
+
+    g_streamEvents.clear();
+    HttpTransport::FetchOptions opts;
+    opts.onResponse = [](int status, long len) {
+        g_streamEvents.push_back("meta:" + std::to_string(status));
+    };
+    opts.onBody = [](const uint8_t*, size_t) { return true; };
+    Response r = http->fetch("https://example.com/ping", opts);
+    TEST_ASSERT_EQUAL(204, r.status);
+    TEST_ASSERT_EQUAL(1, (int)g_streamEvents.size());
+    TEST_ASSERT_EQUAL_STRING("meta:204", g_streamEvents[0].c_str());
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_mock_scripted_response_fires_events);
@@ -351,5 +440,9 @@ int main(int argc, char** argv) {
     RUN_TEST(test_per_call_retries_override_config);
     RUN_TEST(test_timeout_classification);
     RUN_TEST(test_too_large_response_never_retries);
+    RUN_TEST(test_streaming_onresponse_before_chunks);
+    RUN_TEST(test_streaming_abort_stops_and_reports);
+    RUN_TEST(test_streaming_drop_mid_body_no_retry_keeps_status);
+    RUN_TEST(test_streaming_head_only_fires_onresponse);
     return UNITY_END();
 }
