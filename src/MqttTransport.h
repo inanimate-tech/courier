@@ -15,11 +15,13 @@ public:
     // Configuration struct for MqttTransport.
     // topics: auto-subscribed on (re)connect.
     // clientId: if set, used as MQTT client ID; otherwise IDF generates one.
-    // cert_pem: TLS certificate (nullptr = no cert set by Courier).
+    // TLS precedence: cert_pem (pin) > use_cert_bundle (IDF certificate
+    // bundle, the default; requires MBEDTLS_CERTIFICATE_BUNDLE) > nothing.
     struct Config {
         std::vector<std::string> topics;
         const char* clientId = nullptr;
         const char* cert_pem = nullptr;
+        bool use_cert_bundle = true;
         int task_stack = 8192;
     };
 
@@ -75,6 +77,7 @@ private:
     bool _selfHealActive = false;
 
     const char* _certPem = nullptr;
+    bool _useCertBundle = true;
     int _taskStack = 8192;
     ConfigureCallback _configureCallback;
 

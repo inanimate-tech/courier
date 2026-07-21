@@ -101,7 +101,8 @@ void test_begin_no_cert_by_default_and_disables_auto_reconnect() {
     mqtt = createWithTopics();
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
-    TEST_ASSERT_TRUE(client->cert_pem.empty());
+    TEST_ASSERT_TRUE(client->cert_pem.empty());           // bundle, not a pinned PEM
+    TEST_ASSERT_NOT_NULL(client->crt_bundle_attach);      // IDF cert bundle by default
     TEST_ASSERT_FALSE(client->disable_auto_reconnect);  // auto-reconnect enabled for self-healing
 }
 
@@ -487,13 +488,24 @@ void test_config_cert_pem_passed_to_mqtt_client() {
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
     TEST_ASSERT_EQUAL_STRING(MY_CERT, client->cert_pem.c_str());
+    TEST_ASSERT_NULL(client->crt_bundle_attach);          // a pin overrides the bundle
 }
 
-void test_mqtt_no_cert_by_default() {
+void test_mqtt_bundle_by_default_no_cert_when_disabled() {
     mqtt = new MqttTransport();
     mqtt->begin("host", 443, "/path");
     auto* client = MockMqttClient::lastInstance();
     TEST_ASSERT_TRUE(client->cert_pem.empty());
+    TEST_ASSERT_NOT_NULL(client->crt_bundle_attach);
+
+    delete mqtt;
+    MqttTransport::Config cfg;
+    cfg.use_cert_bundle = false;
+    mqtt = new MqttTransport(cfg);
+    mqtt->begin("host", 443, "/path");
+    client = MockMqttClient::lastInstance();
+    TEST_ASSERT_TRUE(client->cert_pem.empty());
+    TEST_ASSERT_NULL(client->crt_bundle_attach);
 }
 
 void test_mqtt_on_configure_called_before_init() {
@@ -601,7 +613,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_second_message_after_drain);
     RUN_TEST(test_set_client_id_before_begin);
     RUN_TEST(test_config_cert_pem_passed_to_mqtt_client);
-    RUN_TEST(test_mqtt_no_cert_by_default);
+    RUN_TEST(test_mqtt_bundle_by_default_no_cert_when_disabled);
     RUN_TEST(test_mqtt_on_configure_called_before_init);
     RUN_TEST(test_mqtt_on_configure_can_override_config_cert);
     RUN_TEST(test_mqtt_on_configure_not_set_works);

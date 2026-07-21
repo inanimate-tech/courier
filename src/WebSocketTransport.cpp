@@ -5,6 +5,12 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp32-hal.h"  // millis() — Arduino.h conflicts with IDF websocket/lwip headers
+// Arduino-only builds (prebuilt arduino-esp32 core): WiFiClientSecure ships a
+// same-named esp_crt_bundle.h that shadows the IDF one and declares only
+// arduino_esp_crt_bundle_attach. The IDF symbol (and the default bundle data)
+// is still present in the prebuilt libmbedtls.a — declare it directly so both
+// include orders compile. Harmless redeclaration in hybrid/IDF builds.
+extern "C" esp_err_t esp_crt_bundle_attach(void* conf);
 static const char* TAG = "WSTransport";
 #else
 #include <Arduino.h>
@@ -13,6 +19,9 @@ static const char* TAG = "WSTransport";
 #define ESP_LOGW(tag, fmt, ...) printf("[%s] WARN: " fmt "\n", tag, ##__VA_ARGS__)
 #define ESP_LOGE(tag, fmt, ...) printf("[%s] ERROR: " fmt "\n", tag, ##__VA_ARGS__)
 static const char* TAG = "WSTransport";
+// Native tests: stand-in with the same shape; the mock config records the
+// pointer so tests can assert bundle selection.
+static esp_err_t esp_crt_bundle_attach(void* conf) { (void)conf; return 0; }
 #endif
 
 namespace Courier {
@@ -40,6 +49,7 @@ static const char* GTS_ROOT_R4_PEM =
 
 WebSocketTransport::WebSocketTransport(const Config& config)
     : _certPem(config.cert_pem),
+      _useCertBundle(config.use_cert_bundle),
       _useDefaultCerts(config.use_default_certs)
 {
 }
@@ -51,6 +61,9 @@ void WebSocketTransport::onConfigure(ConfigureCallback cb)
 
 void WebSocketTransport::useDefaultCerts()
 {
+    // Explicit call = explicit intent: pin to the embedded GTS Root R4
+    // instead of the certificate bundle.
+    _useCertBundle = false;
     _useDefaultCerts = true;
 }
 
@@ -98,6 +111,8 @@ void WebSocketTransport::begin()
     config.uri = uri.c_str();
     if (_certPem) {
         config.cert_pem = _certPem;
+    } else if (_useCertBundle) {
+        config.crt_bundle_attach = esp_crt_bundle_attach;
     } else if (_useDefaultCerts) {
         config.cert_pem = GTS_ROOT_R4_PEM;
     }
