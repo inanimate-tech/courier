@@ -564,6 +564,28 @@ void test_time_sync_301_response_still_sets_clock() {
     TEST_ASSERT_EQUAL(1, MockHttpClient::performCount());
 }
 
+void test_time_sync_accepts_current_utc_despite_local_build_clock() {
+    // __DATE__/__TIME__ are the build machine's LOCAL wall clock parsed as
+    // if UTC, so buildEpoch() can sit up to ~14h ahead of true UTC on a
+    // UTC-ahead build machine (BST bit first: a genuine current-UTC Date
+    // header looked ~1h "before the build" and was rejected). A Date of one
+    // hour ago must clear the floor's timezone slack on ANY build machine.
+    time_t t = time(nullptr) - 3600;
+    char dateBuf[40];
+    struct tm tmv;
+    gmtime_r(&t, &tmv);
+    strftime(dateBuf, sizeof(dateBuf), "%a, %d %b %Y %H:%M:%S GMT", &tmv);
+
+    MockHttpClient::ScriptStep step;
+    step.status = 200;
+    step.headers = {{"Date", dateBuf}};
+    MockHttpClient::pushScript(step);
+
+    advanceToConnected();
+
+    TEST_ASSERT_EQUAL((long)t, (long)Courier::systemClockForTests);
+}
+
 void test_time_sync_rejects_date_before_build() {
     MockHttpClient::ScriptStep old;
     old.status = 200;
@@ -645,6 +667,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_time_sync_sets_system_clock_from_date_header);
     RUN_TEST(test_time_sync_probe_disables_redirect_and_bounds_timeout);
     RUN_TEST(test_time_sync_301_response_still_sets_clock);
+    RUN_TEST(test_time_sync_accepts_current_utc_despite_local_build_clock);
     RUN_TEST(test_time_sync_rejects_date_before_build);
     RUN_TEST(test_time_sync_rejects_date_too_far_in_future);
     RUN_TEST(test_ntp_bridge_rebridges_on_divergence);

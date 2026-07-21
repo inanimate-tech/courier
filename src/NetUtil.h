@@ -28,7 +28,18 @@ time_t parseHttpDateToEpoch(const char* dateHeader);
 // Compile-time epoch floor (from __DATE__/__TIME__). Reject Date-header
 // clock-sets earlier than the firmware build — guards against MITM clock
 // rollback on the unauthenticated time-bootstrap request.
+//
+// Caveat: __DATE__/__TIME__ are the build machine's LOCAL wall clock with
+// no timezone info, parsed here as if UTC — so buildEpoch() can lead true
+// UTC by up to ~14 hours (UTC+14). Comparisons against real UTC times must
+// allow kBuildEpochTzSlack, or a genuine current-UTC Date header gets
+// rejected on any UTC-ahead build machine.
 time_t buildEpoch();
+
+// Timezone slack for buildEpoch() comparisons: covers every UTC offset with
+// margin. Loosening a gross-rollback guard by a day is immaterial to what
+// it exists to block (clocks rolled back to expired-cert eras).
+constexpr time_t kBuildEpochTzSlack = 24 * 3600;
 
 #ifndef ESP_PLATFORM
 // Native-test observability for the two side-effecting functions above.

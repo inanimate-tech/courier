@@ -461,7 +461,11 @@ bool Client::syncTimeFromHttpDate()
     Serial.println("[courier] Failed to parse Date header");
     return false;
   }
-  if (epoch < buildEpoch()) {
+  // Slack because __DATE__/__TIME__ are build-machine LOCAL time parsed as
+  // UTC (see buildEpoch() in NetUtil.h) — without it, a genuine current-UTC
+  // Date header is rejected on any UTC-ahead build machine (found on-device:
+  // a BST build rejected a correct Date fetched within the hour).
+  if (epoch < buildEpoch() - kBuildEpochTzSlack) {
     Serial.println("[courier] Date header predates firmware build - rejecting");
     return false;
   }
