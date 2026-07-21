@@ -91,6 +91,10 @@ void setUp(void) {
     MockHttpClient::resetMock();  // default step carries the Date header
     Courier::systemClockForTests = 0;
     g_mockTimeStatus = timeSet;
+    UTC.setMockNow(0);  // UTC is a global; a prior test's mock-now would re-trigger the bridge
+    g_mockWaitForSyncResult = false;   // NTP "times out" -> Date fallback
+    g_lastWaitForSyncTimeout = 0;
+    g_mockEventsCount = 0;
     Serial.stopCapture();
 
     Config config;
@@ -586,6 +590,63 @@ void test_time_sync_accepts_current_utc_despite_local_build_clock() {
     TEST_ASSERT_EQUAL((long)t, (long)Courier::systemClockForTests);
 }
 
+void test_ntp_first_skips_http_probe() {
+    // When NTP syncs inside the bounded wait, the unauthenticated HTTP Date
+    // probe must never run, and the system clock is set from ezTime.
+    g_mockWaitForSyncResult = true;
+    UTC.setMockNow((time_t)1784622917);
+
+    advanceToConnected();
+
+    TEST_ASSERT_EQUAL(1784622917, (long)Courier::systemClockForTests);
+    TEST_ASSERT_EQUAL(0, MockHttpClient::performCount());
+    // The never-blocks-forever property: waitForSync(0) loops indefinitely
+    // in real ezTime, so the bound must always be passed.
+    TEST_ASSERT_TRUE(g_lastWaitForSyncTimeout > 0);
+}
+
+void test_ntp_timeout_falls_back_to_date_with_bound() {
+    // Default mock: waitForSync false -> HTTP Date fallback (default step
+    // carries a Date). The bounded wait must still have been attempted.
+    advanceToConnected();
+    TEST_ASSERT_TRUE(g_lastWaitForSyncTimeout > 0);
+    TEST_ASSERT_TRUE(Courier::systemClockForTests > 0);
+    TEST_ASSERT_TRUE(MockHttpClient::performCount() >= 1);
+}
+
+void test_eztime_events_gated_on_wifi() {
+    // ezTime's first NTP query fires from the first events() call and only
+    // retries every ~20s on failure — so events() must not run before WiFi
+    // is up, or the bounded waitForSync window is missed on every boot.
+    courier->setup();
+    WiFi.setMockStatus(WL_DISCONNECTED);
+    int before = g_mockEventsCount;
+    courier->loop();
+    TEST_ASSERT_EQUAL(before, g_mockEventsCount);   // gated while down
+    WiFi.setMockStatus(WL_CONNECTED);
+    courier->loop();
+    TEST_ASSERT_EQUAL(before + 1, g_mockEventsCount);  // flows when up
+}
+
+void test_time_sync_failure_reports_reason() {
+    std::string lastCategory, lastMessage;
+    courier->onError([&](const char* category, const char* message) {
+        lastCategory = category;
+        lastMessage = message;
+    });
+    // Date-less responses on both probe legs -> "no Date header" reason.
+    MockHttpClient::ScriptStep noDate;
+    noDate.status = 200;
+    MockHttpClient::pushScript(noDate);
+    MockHttpClient::pushScript(noDate);
+
+    advanceToConnected();
+
+    TEST_ASSERT_EQUAL(0, (long)Courier::systemClockForTests);
+    TEST_ASSERT_EQUAL_STRING("TIME_SYNC", lastCategory.c_str());
+    TEST_ASSERT_EQUAL_STRING("no Date header in response", lastMessage.c_str());
+}
+
 void test_time_sync_rejects_date_before_build() {
     MockHttpClient::ScriptStep old;
     old.status = 200;
@@ -667,6 +728,10 @@ int main(int argc, char** argv) {
     RUN_TEST(test_time_sync_sets_system_clock_from_date_header);
     RUN_TEST(test_time_sync_probe_disables_redirect_and_bounds_timeout);
     RUN_TEST(test_time_sync_301_response_still_sets_clock);
+    RUN_TEST(test_ntp_first_skips_http_probe);
+    RUN_TEST(test_ntp_timeout_falls_back_to_date_with_bound);
+    RUN_TEST(test_eztime_events_gated_on_wifi);
+    RUN_TEST(test_time_sync_failure_reports_reason);
     RUN_TEST(test_time_sync_accepts_current_utc_despite_local_build_clock);
     RUN_TEST(test_time_sync_rejects_date_before_build);
     RUN_TEST(test_time_sync_rejects_date_too_far_in_future);

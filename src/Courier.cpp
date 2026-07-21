@@ -76,7 +76,16 @@ void Client::loop()
   // the ESP32 RTC drifts enough after 2-3 days to break TLS cert validation.
   // HTTP Date header (in syncTimeFromHttpDate) is the fallback for first boot
   // when NTP hasn't resolved yet.
-  events();
+  //
+  // Gated on WiFi: ezTime fires its FIRST NTP query from the first events()
+  // call and, on failure, only retries every ~20s. Fired before WiFi is up,
+  // that first query fails NO_NETWORK and pushes the initial sync well past
+  // handleWifiConnectedState's bounded waitForSync window — which would then
+  // "time out" on every boot despite NTP being reachable (poem-firmware's
+  // time_source finding).
+  if (WiFi.status() == WL_CONNECTED) {
+    events();
+  }
 
   // Bridge ezTime -> system clock whenever NTP has synced and diverges from
   // the system clock by more than a few seconds: mbedTLS validates
@@ -193,12 +202,26 @@ void Client::handleWifiConnectedState()
   // Attempt time synchronization once
   if (!_timeSyncAttempted)
   {
-    Serial.println("[courier] Fetching time from HTTPS Date header...");
-    if (syncTimeFromHttpDate()) {
-      Serial.println("[courier] Time synced via HTTP Date header!");
+    // NTP first, bounded: higher-quality time, and on networks where NTP
+    // works the unauthenticated HTTP Date probe never runs at all. The
+    // timeout must always be non-zero — waitForSync(0) blocks forever.
+    // (events() is WiFi-gated in loop() so ezTime's first query has fired
+    // by now; without that gate this wait times out on every boot.)
+    Serial.println("[courier] Waiting for NTP sync (bounded)...");
+    if (waitForSync(NTP_SYNC_TIMEOUT_S)) {
+      time_t nowUtc = UTC.now();
+      if (nowUtc > 0) {
+        setSystemClock(nowUtc);  // mbedTLS reads the system clock
+      }
+      Serial.println("[courier] Time synced via NTP");
     } else {
-      Serial.println("[courier] HTTP time sync failed - time may be unavailable");
-      fireErrorCallbacks("TIME_SYNC", "HTTP Date header not available");
+      Serial.println("[courier] NTP timed out - falling back to HTTP Date header...");
+      if (syncTimeFromHttpDate()) {
+        Serial.println("[courier] Time synced via HTTP Date header!");
+      } else {
+        // syncTimeFromHttpDate fired a TIME_SYNC error with the reason.
+        Serial.println("[courier] Time sync failed - time may be unavailable");
+      }
     }
     _timeSyncAttempted = true;
   }
@@ -446,12 +469,14 @@ bool Client::syncTimeFromHttpDate()
   }
   if (!r.reachedServer()) {
     Serial.printf("[courier] HTTP time request failed: %d\n", r.status);
+    fireErrorCallbacks("TIME_SYNC", "time probe unreachable");
     return false;
   }
 
   const char* dateHeader = r.header("Date");
   if (!dateHeader) {
     Serial.println("[courier] No Date header in response");
+    fireErrorCallbacks("TIME_SYNC", "no Date header in response");
     return false;
   }
   Serial.printf("[courier] Date header: %s\n", dateHeader);
@@ -459,6 +484,7 @@ bool Client::syncTimeFromHttpDate()
   time_t epoch = parseHttpDateToEpoch(dateHeader);
   if (epoch == 0) {
     Serial.println("[courier] Failed to parse Date header");
+    fireErrorCallbacks("TIME_SYNC", "Date header unparseable");
     return false;
   }
   // Slack because __DATE__/__TIME__ are build-machine LOCAL time parsed as
@@ -467,11 +493,13 @@ bool Client::syncTimeFromHttpDate()
   // a BST build rejected a correct Date fetched within the hour).
   if (epoch < buildEpoch() - kBuildEpochTzSlack) {
     Serial.println("[courier] Date header predates firmware build - rejecting");
+    fireErrorCallbacks("TIME_SYNC", "Date header predates firmware build");
     return false;
   }
   time_t ceiling = buildEpoch() + (time_t)(10 * 365 * 86400);  // 10 years
   if (epoch > ceiling) {
     Serial.println("[courier] Date header implausibly far in the future - rejecting");
+    fireErrorCallbacks("TIME_SYNC", "Date header implausibly far in the future");
     return false;
   }
 
