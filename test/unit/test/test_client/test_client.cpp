@@ -3,9 +3,14 @@
 #include <Transport.h>
 #include <MqttTransport.h>
 #include <mqtt_client.h>
-#include <HTTPClient.h>
+#include <WiFi.h>
+#include <HttpTransport.h>
+#include <esp_http_client.h>
 #include <ArduinoJson.h>
+#include <NetUtil.h>
+#include <ezTime.h>
 #include <cstring>
+#include <ctime>
 #include <vector>
 
 using namespace Courier;
@@ -82,8 +87,14 @@ static void advanceToConnected() {
 void setUp(void) {
     _mock_millis = 0;
     WiFi.resetMock();
-    HTTPClient::setDefaultMockResponse(200, "{}");
-    HTTPClient::setDefaultMockHeader("Tue, 18 Feb 2026 12:00:00 GMT");
+    MockWebSocketClient::resetInstanceCount();
+    MockHttpClient::resetMock();  // default step carries the Date header
+    Courier::systemClockForTests = 0;
+    g_mockTimeStatus = timeSet;
+    UTC.setMockNow(0);  // UTC is a global; a prior test's mock-now would re-trigger the bridge
+    g_mockWaitForSyncResult = false;   // NTP "times out" -> Date fallback
+    g_lastWaitForSyncTimeout = 0;
+    g_mockEventsCount = 0;
     Serial.stopCapture();
 
     Config config;
@@ -96,7 +107,6 @@ void setUp(void) {
 void tearDown(void) {
     delete courier;
     courier = nullptr;
-    HTTPClient::resetMockDefaults();
 }
 
 void test_initial_state() {
@@ -406,6 +416,284 @@ void test_reconnect_transitions_through_reconnecting() {
     // verify the public method puts us in Reconnecting state.
 }
 
+void test_dns_flush_on_transports_connecting_entry() {
+    int before = dnsFlushCountForTests;
+    courier->setup();
+    courier->loop();  // WifiConnecting -> WifiConnected
+    courier->loop();  // WifiConnected -> TransportsConnecting
+    courier->loop();  // TransportsConnecting entry: flush, then begin()
+    TEST_ASSERT_EQUAL(before + 1, dnsFlushCountForTests);
+    // Subsequent loops in the same connect cycle must NOT flush again.
+    courier->loop();
+    TEST_ASSERT_EQUAL(before + 1, dnsFlushCountForTests);
+}
+
+static std::string g_clientMsgLog;
+
+void test_https_only_no_auto_ws_and_send_routes() {
+    // HTTPS-only persona: host set for endpoint/time-sync, default "https".
+    delete courier;
+    Config cfg;
+    cfg.host = "api.example.com";
+    cfg.port = 443;
+    cfg.path = "/inbox";
+    cfg.defaultTransport = "https";
+    courier = new Client(cfg);
+
+    // No built-in WS was auto-registered: the HttpTransport is the only one.
+    auto& http = courier->addTransport<HttpTransport>("https");
+
+    courier->setup();
+    courier->loop();  // WifiConnecting -> WifiConnected
+    courier->loop();  // WifiConnected -> TransportsConnecting
+    courier->loop();  // begin() -> HttpTransport connected (WiFi up)
+    courier->loop();  // -> Connected
+    TEST_ASSERT_TRUE(courier->isConnected());
+    TEST_ASSERT_EQUAL(0, MockWebSocketClient::instanceCount());  // no stray WS
+
+    JsonDocument doc;
+    doc["type"] = "status";
+    TEST_ASSERT_TRUE(courier->send(doc));  // routed via defaultTransport
+    TEST_ASSERT_EQUAL_STRING("https://api.example.com/inbox",
+        MockHttpClient::lastInstance()->url.c_str());
+}
+
+void test_https_reply_reaches_client_onmessage() {
+    delete courier;
+    Config cfg;
+    cfg.host = "api.example.com";
+    cfg.defaultTransport = "https";
+    courier = new Client(cfg);
+    courier->addTransport<HttpTransport>("https");
+    g_clientMsgLog.clear();
+    courier->onMessage([](const char* tname, const char* type, JsonDocument& doc) {
+        g_clientMsgLog += tname;
+        g_clientMsgLog += ":";
+        g_clientMsgLog += type;
+    });
+
+    courier->setup();
+    courier->loop();
+    courier->loop();
+    courier->loop();
+    courier->loop();
+
+    MockHttpClient::ScriptStep reply;
+    reply.status = 200;
+    reply.headers = {{"Content-Type", "application/json"}};
+    reply.bodyChunks = {"{\"type\":\"welcome\"}"};
+    MockHttpClient::pushScript(reply);
+
+    JsonDocument doc;
+    doc["type"] = "hello";
+    TEST_ASSERT_TRUE(courier->send(doc));
+    courier->loop();  // drain -> dispatchJSON -> onMessage
+    TEST_ASSERT_EQUAL_STRING("https:welcome", g_clientMsgLog.c_str());
+}
+
+void test_auto_ws_still_registers_for_default_and_explicit_ws() {
+    delete courier;
+    Config cfg;
+    cfg.host = "test.example.com";  // defaultTransport null -> defaults to "ws"
+    courier = new Client(cfg);
+    courier->setup();
+    courier->loop();
+    courier->loop();
+    courier->loop();
+    TEST_ASSERT_EQUAL(1, MockWebSocketClient::instanceCount());
+
+    // Explicit defaultTransport = "ws" must also auto-register (not just the
+    // null/unset case above).
+    delete courier;
+    MockWebSocketClient::resetInstanceCount();
+    Config cfg2;
+    cfg2.host = "test.example.com";
+    cfg2.defaultTransport = "ws";
+    courier = new Client(cfg2);
+    courier->setup();
+    courier->loop();
+    courier->loop();
+    courier->loop();
+    TEST_ASSERT_EQUAL(1, MockWebSocketClient::instanceCount());
+}
+
+void test_time_sync_sets_system_clock_from_date_header() {
+    advanceToConnected();
+    // Default mock Date is computed dynamically (real wall clock + 1 day) so
+    // it always clears the buildEpoch() floor and stays under the 10-year
+    // plausibility ceiling in Client::syncTimeFromHttpDate() regardless of
+    // when the test runs — assert against those computed properties rather
+    // than a literal epoch.
+    TEST_ASSERT_TRUE(Courier::systemClockForTests > Courier::buildEpoch());
+    TEST_ASSERT_TRUE(Courier::systemClockForTests > time(nullptr));
+    TEST_ASSERT_TRUE(Courier::systemClockForTests < time(nullptr) + 2 * 86400);
+}
+
+void test_time_sync_probe_disables_redirect_and_bounds_timeout() {
+    advanceToConnected();
+    // syncTimeFromHttpDate's probe must not silently follow a redirect into
+    // a cold-clock TLS handshake, and must not block the state machine for
+    // long: 5s timeout, no retries.
+    auto& cfg = MockHttpClient::lastConfig();
+    TEST_ASSERT_TRUE(cfg.disable_auto_redirect);
+    TEST_ASSERT_EQUAL(5000, cfg.timeout_ms);
+}
+
+void test_time_sync_301_response_still_sets_clock() {
+    // Near-future date (real wall clock + 1 day), computed dynamically so
+    // this doesn't become a fixed-literal time bomb like the one it replaces
+    // (see MockHttpClient::resetMock()'s default Date, same rationale).
+    time_t t = time(nullptr) + 86400;
+    char dateBuf[40];
+    struct tm tmv;
+    gmtime_r(&t, &tmv);
+    strftime(dateBuf, sizeof(dateBuf), "%a, %d %b %Y %H:%M:%S GMT", &tmv);
+
+    MockHttpClient::ScriptStep redirect;
+    redirect.status = 301;  // the probe's 301 IS the final response (no follow)
+    redirect.headers = {{"Location", "https://test.example.com/"},
+                        {"Date", dateBuf}};
+    MockHttpClient::pushScript(redirect);
+
+    advanceToConnected();
+
+    TEST_ASSERT_TRUE(Courier::systemClockForTests > Courier::buildEpoch());
+    TEST_ASSERT_TRUE(Courier::systemClockForTests > time(nullptr));
+    TEST_ASSERT_TRUE(Courier::systemClockForTests < time(nullptr) + 2 * 86400);
+    // The Date must have come from the 301 on the plain-HTTP leg — exactly
+    // one request. If the http leg had failed, the https fallback would run
+    // and could mask the failure by consuming the mock's default 200 step
+    // (which is what happened on-device under IDF 4.4, where perform()
+    // returns ESP_ERR_HTTP_MAX_REDIRECT for a non-followed redirect).
+    TEST_ASSERT_EQUAL(1, MockHttpClient::performCount());
+}
+
+void test_time_sync_accepts_current_utc_despite_local_build_clock() {
+    // __DATE__/__TIME__ are the build machine's LOCAL wall clock parsed as
+    // if UTC, so buildEpoch() can sit up to ~14h ahead of true UTC on a
+    // UTC-ahead build machine (BST bit first: a genuine current-UTC Date
+    // header looked ~1h "before the build" and was rejected). A Date of one
+    // hour ago must clear the floor's timezone slack on ANY build machine.
+    time_t t = time(nullptr) - 3600;
+    char dateBuf[40];
+    struct tm tmv;
+    gmtime_r(&t, &tmv);
+    strftime(dateBuf, sizeof(dateBuf), "%a, %d %b %Y %H:%M:%S GMT", &tmv);
+
+    MockHttpClient::ScriptStep step;
+    step.status = 200;
+    step.headers = {{"Date", dateBuf}};
+    MockHttpClient::pushScript(step);
+
+    advanceToConnected();
+
+    TEST_ASSERT_EQUAL((long)t, (long)Courier::systemClockForTests);
+}
+
+void test_ntp_first_skips_http_probe() {
+    // When NTP syncs inside the bounded wait, the unauthenticated HTTP Date
+    // probe must never run, and the system clock is set from ezTime.
+    g_mockWaitForSyncResult = true;
+    UTC.setMockNow((time_t)1784622917);
+
+    advanceToConnected();
+
+    TEST_ASSERT_EQUAL(1784622917, (long)Courier::systemClockForTests);
+    TEST_ASSERT_EQUAL(0, MockHttpClient::performCount());
+    // The never-blocks-forever property: waitForSync(0) loops indefinitely
+    // in real ezTime, so the bound must always be passed.
+    TEST_ASSERT_TRUE(g_lastWaitForSyncTimeout > 0);
+}
+
+void test_ntp_timeout_falls_back_to_date_with_bound() {
+    // Default mock: waitForSync false -> HTTP Date fallback (default step
+    // carries a Date). The bounded wait must still have been attempted.
+    advanceToConnected();
+    TEST_ASSERT_TRUE(g_lastWaitForSyncTimeout > 0);
+    TEST_ASSERT_TRUE(Courier::systemClockForTests > 0);
+    TEST_ASSERT_TRUE(MockHttpClient::performCount() >= 1);
+}
+
+void test_eztime_events_gated_on_wifi() {
+    // ezTime's first NTP query fires from the first events() call and only
+    // retries every ~20s on failure — so events() must not run before WiFi
+    // is up, or the bounded waitForSync window is missed on every boot.
+    courier->setup();
+    WiFi.setMockStatus(WL_DISCONNECTED);
+    int before = g_mockEventsCount;
+    courier->loop();
+    TEST_ASSERT_EQUAL(before, g_mockEventsCount);   // gated while down
+    WiFi.setMockStatus(WL_CONNECTED);
+    courier->loop();
+    TEST_ASSERT_EQUAL(before + 1, g_mockEventsCount);  // flows when up
+}
+
+void test_time_sync_failure_reports_reason() {
+    std::string lastCategory, lastMessage;
+    courier->onError([&](const char* category, const char* message) {
+        lastCategory = category;
+        lastMessage = message;
+    });
+    // Date-less responses on both probe legs -> "no Date header" reason.
+    MockHttpClient::ScriptStep noDate;
+    noDate.status = 200;
+    MockHttpClient::pushScript(noDate);
+    MockHttpClient::pushScript(noDate);
+
+    advanceToConnected();
+
+    TEST_ASSERT_EQUAL(0, (long)Courier::systemClockForTests);
+    TEST_ASSERT_EQUAL_STRING("TIME_SYNC", lastCategory.c_str());
+    TEST_ASSERT_EQUAL_STRING("no Date header in response", lastMessage.c_str());
+}
+
+void test_time_sync_rejects_date_before_build() {
+    MockHttpClient::ScriptStep old;
+    old.status = 200;
+    old.headers = {{"Date", "Mon, 01 Jan 2001 00:00:00 GMT"}};
+    // http:// attempt succeeds with a Date, so no https:// fallback is ever
+    // attempted — the buildEpoch() floor rejects it afterward.
+    MockHttpClient::pushScript(old);
+    advanceToConnected();
+    TEST_ASSERT_EQUAL(0, (long)Courier::systemClockForTests);
+}
+
+void test_time_sync_rejects_date_too_far_in_future() {
+    MockHttpClient::ScriptStep farFuture;
+    farFuture.status = 200;
+    farFuture.headers = {{"Date", "Tue, 01 Jan 2099 12:00:00 GMT"}};
+    MockHttpClient::pushScript(farFuture);  // http:// attempt only
+    advanceToConnected();
+    TEST_ASSERT_EQUAL(0, (long)Courier::systemClockForTests);
+}
+
+void test_ntp_bridge_rebridges_on_divergence() {
+    g_mockTimeStatus = timeNotSet;   // suppress bridge during connect
+    MockHttpClient::ScriptStep noDate;
+    noDate.status = 200;             // Date-less responses: HTTP sync fails
+    MockHttpClient::pushScript(noDate);  // http:// attempt
+    MockHttpClient::pushScript(noDate);  // https:// fallback attempt
+    advanceToConnected();
+    TEST_ASSERT_EQUAL(0, (long)Courier::systemClockForTests);
+
+    // NTP "arrives": ezTime reports synced with a real epoch.
+    g_mockTimeStatus = timeSet;
+    UTC.setMockNow((time_t)1771416000);
+    courier->loop();
+    TEST_ASSERT_EQUAL(1771416000, (long)Courier::systemClockForTests);
+
+    // Small divergence (drift ezTime already smooths) — left alone.
+    UTC.setMockNow((time_t)1771416003);
+    courier->loop();
+    TEST_ASSERT_EQUAL(1771416000, (long)Courier::systemClockForTests);
+
+    // Large divergence (e.g. system clock drifted, or was poisoned by a bad
+    // Date header) — a genuine NTP correction re-bridges to repair it.
+    UTC.setMockNow((time_t)1771417000);
+    courier->loop();
+    TEST_ASSERT_EQUAL(1771417000, (long)Courier::systemClockForTests);
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
 
@@ -433,6 +721,21 @@ int main(int argc, char** argv) {
     RUN_TEST(test_setEndpoint_overrides_seeded_values);
     RUN_TEST(test_setEndpoint_copies_string_inputs);
     RUN_TEST(test_reconnect_transitions_through_reconnecting);
+    RUN_TEST(test_dns_flush_on_transports_connecting_entry);
+    RUN_TEST(test_https_only_no_auto_ws_and_send_routes);
+    RUN_TEST(test_https_reply_reaches_client_onmessage);
+    RUN_TEST(test_auto_ws_still_registers_for_default_and_explicit_ws);
+    RUN_TEST(test_time_sync_sets_system_clock_from_date_header);
+    RUN_TEST(test_time_sync_probe_disables_redirect_and_bounds_timeout);
+    RUN_TEST(test_time_sync_301_response_still_sets_clock);
+    RUN_TEST(test_ntp_first_skips_http_probe);
+    RUN_TEST(test_ntp_timeout_falls_back_to_date_with_bound);
+    RUN_TEST(test_eztime_events_gated_on_wifi);
+    RUN_TEST(test_time_sync_failure_reports_reason);
+    RUN_TEST(test_time_sync_accepts_current_utc_despite_local_build_clock);
+    RUN_TEST(test_time_sync_rejects_date_before_build);
+    RUN_TEST(test_time_sync_rejects_date_too_far_in_future);
+    RUN_TEST(test_ntp_bridge_rebridges_on_divergence);
 
     return UNITY_END();
 }

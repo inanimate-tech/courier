@@ -228,6 +228,10 @@ private:
   static constexpr unsigned long MAX_RECONNECT_INTERVAL = 60000;
   static constexpr uint8_t MAX_RECONNECT_ATTEMPTS = 10;
 
+  // Bounded wait for the initial NTP sync before falling back to the HTTP
+  // Date probe. Never pass 0 to waitForSync — it blocks forever.
+  static constexpr uint16_t NTP_SYNC_TIMEOUT_S = 8;
+
   // Singleton for WiFiManager static callback
   static Client* _instance;
 

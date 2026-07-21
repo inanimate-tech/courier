@@ -1,8 +1,29 @@
 # Changelog
 
-## v0.4.3-dev
+## v0.5.0-dev
 
-Theme: receive-path memory — larger messages on no-PSRAM boards.
+Theme: receive-path memory — larger messages on no-PSRAM boards; `HttpTransport` hardening.
+
+### New
+
+- **`HttpTransport`** — opt-in HTTPS transport (blocking `fetch()`, buffered or streaming) that also participates as a full transport citizen via `send()`/`onMessage`. Set `defaultTransport = "https"` to skip the built-in `"ws"` and use `HttpTransport` instead. See the README's HTTPS section.
+
+### Upgrading notes
+
+- **Behavior change: built-in `"ws"` auto-registration is now conditional on `defaultTransport`.** The built-in `"ws"` transport now auto-registers only when `Config::host` is set AND `defaultTransport` is `"ws"` or unset. Previously it registered whenever `host` was set, regardless of `defaultTransport`. If you relied on the implicit WS transport alongside a different default (e.g. `defaultTransport: "mqtt"`), register it explicitly with `addTransport<WebSocketTransport>("ws")`.
+- **Binary size.** `esp_http_client` and the IDF certificate bundle are now always linked in (Courier's time-sync bootstrap depends on them), adding roughly +80-100KB to firmware binary size even for projects that never construct an `HttpTransport`.
+- **`settimeofday` now set by Courier.** `Client::syncTimeFromHttpDate()` calls `setSystemClock()` (`settimeofday`) in addition to ezTime's `UTC.setTime()` — previously only ezTime's virtual clock was set from the HTTP Date header, so the system clock (which mbedTLS/TLS cert validation reads) stayed at its boot default until NTP arrived. `Client::loop()`'s NTP bridge now also re-fires whenever ezTime and the system clock diverge by more than 5s (previously a one-shot latch), so a later genuine NTP correction can repair a poisoned or drifted system clock.
+
+### Fixes
+
+- **NTP-first time acquisition with a bounded wait (poem-firmware pattern).** `Client` now tries NTP first via ezTime's `waitForSync()` with an 8s bound (never 0 — that blocks forever), falling back to the HTTP Date probe only on timeout. On networks where NTP works, the unauthenticated Date probe never runs at all. `events()` is now gated on WiFi being connected: ezTime fires its first NTP query from the first `events()` call and only retries every ~20s on failure, so an early pre-WiFi call pushed the initial sync past any bounded wait (and previously delayed first NTP sync by ~20s). `TIME_SYNC` error callbacks now carry the specific failure reason (probe unreachable / no Date header / unparseable / predates build / implausibly far in future).
+
+- **Time-bootstrap redirect trap.** The HTTP Date-header probe (`syncTimeFromHttpDate`) now sets `disable_auto_redirect` so a 301 on the plain-HTTP leg is treated as the response (Date header captured) instead of being silently followed into a cold-clock TLS handshake that fails and discards the Date. Both legs are now capped at a 5s timeout with no retries, bounding the worst-case blocked time during bootstrap.
+- **Build-epoch floor rejected valid current-UTC Date headers on UTC-ahead build machines.** `__DATE__`/`__TIME__` are the build machine's *local* wall clock parsed as if UTC, so `buildEpoch()` can lead true UTC by up to ~14 hours — a firmware built in BST rejected a perfectly correct Date header fetched within the hour ("Date header predates firmware build"). The floor comparison now allows 24 hours of timezone slack (`kBuildEpochTzSlack`), which covers every UTC offset while still blocking the gross clock-rollback the guard exists for.
+- **`ESP_ERR_HTTP_MAX_REDIRECT` misclassified as a transport failure.** On IDF 4.4 (Arduino core 2.x), `esp_http_client_perform()` returns `ESP_ERR_HTTP_MAX_REDIRECT` for *any* non-2xx status when `disable_auto_redirect` is set — after the status and headers were already parsed (IDF 5.x reports the 3xx as a normal response instead). `HttpTransport` treated that error as `ErrConnect`, discarding the already-captured response — which broke the time-sync probe on Cloudflare-fronted hosts (`E HTTP_CLIENT: Error, reach max_redirection_count count=0`) and burned pointless retries against a reachable server. The classification now returns the real HTTP status whenever one was parsed alongside that error, on both IDF generations.
+- **Clock-forward plausibility ceiling.** `syncTimeFromHttpDate` now rejects Date headers more than 10 years past the firmware build date (alongside the existing floor that rejects dates before the build), guarding against a MITM setting the clock implausibly far forward on the unauthenticated bootstrap leg.
+- **Redirects corrupting buffered/streaming `fetch()` responses.** `HttpTransport::eventHandler` now resets accumulated body/headers when a new hop's headers arrive after a previous hop's response had already been latched, and never accumulates or streams a 3xx hop's body. Previously an intermediate redirect with its own body could latch the wrong status and concatenate the redirect body with the final response's body.
+- **`HttpTransport::send()`** no longer dispatches a truncated (`!complete()`) JSON reply to `onMessage` — `send()` still reports `ok()` (e.g. `true` for a 2xx that got cut short), but truncated JSON never reaches the raw hook.
 
 ### Improved
 
