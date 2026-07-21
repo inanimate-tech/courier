@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.5.0-dev
+## v0.5.0
 
 Theme: receive-path memory — larger messages on no-PSRAM boards; `HttpTransport` hardening.
 
