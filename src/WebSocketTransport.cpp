@@ -1,5 +1,6 @@
 #include "WebSocketTransport.h"
 #include <cstring>
+#include <utility>
 
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
@@ -25,6 +26,20 @@ static esp_err_t esp_crt_bundle_attach(void* conf) { (void)conf; return 0; }
 #endif
 
 namespace Courier {
+
+// Old bundled esp_websocket_client copies (the IDF 4.x SDKs inside Arduino
+// 2.x cores) predate the crt_bundle_attach hook on the client config.
+// Detect the member at compile time: when absent, return false so begin()
+// falls back to the embedded root CA instead of failing to compile.
+template <typename C>
+static auto tryAttachCertBundle(C& cfg, int)
+    -> decltype((void)std::declval<C&>().crt_bundle_attach, bool())
+{
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    return true;
+}
+template <typename C>
+static bool tryAttachCertBundle(C&, long) { return false; }
 
 WebSocketTransport::WebSocketTransport()
 {
@@ -111,8 +126,8 @@ void WebSocketTransport::begin()
     config.uri = uri.c_str();
     if (_certPem) {
         config.cert_pem = _certPem;
-    } else if (_useCertBundle) {
-        config.crt_bundle_attach = esp_crt_bundle_attach;
+    } else if (_useCertBundle && tryAttachCertBundle(config, 0)) {
+        // IDF certificate bundle attached (esp_crt_bundle_attach).
     } else if (_useDefaultCerts) {
         config.cert_pem = GTS_ROOT_R4_PEM;
     }
