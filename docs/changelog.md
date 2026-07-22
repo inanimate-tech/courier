@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.5.1-dev
+## v0.5.1
 
 ### New
 
