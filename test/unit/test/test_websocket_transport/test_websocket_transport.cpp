@@ -71,7 +71,8 @@ void test_begin_creates_client_with_wss_uri() {
 void test_begin_sets_config_defaults() {
     ws->begin("host", 443, "/path");
     auto* client = MockWebSocketClient::lastInstance();
-    TEST_ASSERT_FALSE(client->cert_pem.empty());
+    TEST_ASSERT_TRUE(client->cert_pem.empty());           // bundle, not a pinned PEM
+    TEST_ASSERT_NOT_NULL(client->crt_bundle_attach);      // IDF cert bundle by default
     TEST_ASSERT_FALSE(client->disable_auto_reconnect);  // auto-reconnect enabled for self-healing
     TEST_ASSERT_EQUAL(20, client->pingpong_timeout_sec);
 }
@@ -193,18 +194,27 @@ void test_config_cert_pem_passed_to_client() {
     ws->begin("host", 443, "/path");
     auto* client = MockWebSocketClient::lastInstance();
     TEST_ASSERT_EQUAL_STRING(MY_CERT, client->cert_pem.c_str());
+    TEST_ASSERT_NULL(client->crt_bundle_attach);          // a pin overrides the bundle
 }
 
-void test_default_certs_used_by_default() {
+void test_embedded_root_used_when_bundle_disabled() {
+    delete ws;
+    WebSocketTransport::Config cfg;
+    cfg.use_cert_bundle = false;                          // fall back to embedded GTS Root R4
+    ws = new WebSocketTransport(cfg);
+    ws->setMessageCallback(onMessageCallback);
+    ws->setConnectionCallback(onConnectionCallback);
     ws->begin("host", 443, "/path");
     auto* client = MockWebSocketClient::lastInstance();
+    TEST_ASSERT_NULL(client->crt_bundle_attach);
     TEST_ASSERT_FALSE(client->cert_pem.empty());
     TEST_ASSERT_NOT_NULL(strstr(client->cert_pem.c_str(), "BEGIN CERTIFICATE"));
 }
 
-void test_no_cert_when_default_certs_disabled() {
+void test_no_cert_when_bundle_and_default_certs_disabled() {
     delete ws;
     WebSocketTransport::Config cfg;
+    cfg.use_cert_bundle = false;
     cfg.use_default_certs = false;
     ws = new WebSocketTransport(cfg);
     ws->setMessageCallback(onMessageCallback);
@@ -212,6 +222,7 @@ void test_no_cert_when_default_certs_disabled() {
     ws->begin("host", 443, "/path");
     auto* client = MockWebSocketClient::lastInstance();
     TEST_ASSERT_TRUE(client->cert_pem.empty());
+    TEST_ASSERT_NULL(client->crt_bundle_attach);
 }
 
 void test_on_configure_called_before_init() {
@@ -349,8 +360,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_disconnect_sets_not_connected);
     RUN_TEST(test_reconnect_creates_new_client);
     RUN_TEST(test_config_cert_pem_passed_to_client);
-    RUN_TEST(test_default_certs_used_by_default);
-    RUN_TEST(test_no_cert_when_default_certs_disabled);
+    RUN_TEST(test_embedded_root_used_when_bundle_disabled);
+    RUN_TEST(test_no_cert_when_bundle_and_default_certs_disabled);
     RUN_TEST(test_on_configure_called_before_init);
     RUN_TEST(test_on_configure_can_override_config_cert);
     RUN_TEST(test_on_configure_not_set_works);

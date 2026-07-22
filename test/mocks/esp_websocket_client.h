@@ -51,6 +51,7 @@ typedef void (*esp_event_handler_t)(void* event_handler_arg,
 typedef struct {
     const char* uri;
     const char* cert_pem;
+    esp_err_t (*crt_bundle_attach)(void* conf);
     bool disable_auto_reconnect;
     int pingpong_timeout_sec;
     void* user_context;
@@ -65,6 +66,7 @@ public:
 
     std::string uri;
     std::string cert_pem;
+    esp_err_t (*crt_bundle_attach)(void*) = nullptr;
     bool disable_auto_reconnect = false;
     int pingpong_timeout_sec = 0;
 
@@ -161,6 +163,7 @@ inline esp_websocket_client_handle_t esp_websocket_client_init(
     auto* client = new MockWebSocketClient();
     if (config->uri) client->uri = config->uri;
     if (config->cert_pem) client->cert_pem = config->cert_pem;
+    client->crt_bundle_attach = config->crt_bundle_attach;
     client->disable_auto_reconnect = config->disable_auto_reconnect;
     client->pingpong_timeout_sec = config->pingpong_timeout_sec;
     return client;

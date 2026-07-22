@@ -11,9 +11,13 @@ namespace Courier {
 
 class WebSocketTransport : public Transport {
 public:
+    // TLS precedence: cert_pem (pin) > use_cert_bundle (IDF certificate
+    // bundle, the default) > use_default_certs (embedded GTS Root R4 —
+    // legacy fallback for builds without MBEDTLS_CERTIFICATE_BUNDLE).
     struct Config {
-        const char* cert_pem = nullptr;      // Specific CA cert in PEM format
-        bool use_default_certs = true;       // Use Courier's built-in root CA certs (GTS Root R4)
+        const char* cert_pem = nullptr;      // Specific CA cert in PEM format (pin)
+        bool use_cert_bundle = true;         // IDF cert bundle (esp_crt_bundle_attach)
+        bool use_default_certs = true;       // Embedded GTS Root R4 when bundle disabled
     };
 
     WebSocketTransport();
@@ -55,6 +59,7 @@ private:
     bool _selfHealActive = false;
 
     const char* _certPem = nullptr;
+    bool _useCertBundle = true;
     bool _useDefaultCerts = true;
     ConfigureCallback _configureCallback;
 

@@ -62,6 +62,7 @@ typedef MockMqttClient* esp_mqtt_client_handle_t;
 typedef struct {
     const char* uri;
     const char* cert_pem;
+    esp_err_t (*crt_bundle_attach)(void* conf);
     const char* client_id;
     bool disable_auto_reconnect;
     void* user_context;
@@ -76,6 +77,7 @@ public:
 
     std::string uri;
     std::string cert_pem;
+    esp_err_t (*crt_bundle_attach)(void*) = nullptr;
     std::string clientId;
     bool disable_auto_reconnect = false;
 
@@ -160,6 +162,7 @@ inline esp_mqtt_client_handle_t esp_mqtt_client_init(
     auto* client = new MockMqttClient();
     if (config->uri) client->uri = config->uri;
     if (config->cert_pem) client->cert_pem = config->cert_pem;
+    client->crt_bundle_attach = config->crt_bundle_attach;
     if (config->client_id) client->clientId = config->client_id;
     client->disable_auto_reconnect = config->disable_auto_reconnect;
     return client;

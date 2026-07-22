@@ -10,6 +10,9 @@
 // ESP-IDF v5.x restructured esp_mqtt_client_config_t into nested sub-structs.
 // Arduino framework (PlatformIO) bundles ESP-IDF v4.4.x with flat fields.
 #define MQTT_CONFIG_V5 (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
+// See WebSocketTransport.cpp: Arduino cores ship a same-named esp_crt_bundle.h
+// shadowing the IDF one — declare the IDF symbol directly.
+extern "C" esp_err_t esp_crt_bundle_attach(void* conf);
 static const char* TAG = "MqttTransport";
 #else
 #include <Arduino.h>
@@ -18,6 +21,9 @@ static const char* TAG = "MqttTransport";
 #define ESP_LOGW(tag, fmt, ...) printf("[%s] WARN: " fmt "\n", tag, ##__VA_ARGS__)
 #define ESP_LOGE(tag, fmt, ...) printf("[%s] ERROR: " fmt "\n", tag, ##__VA_ARGS__)
 static const char* TAG = "MqttTransport";
+// Native tests: stand-in with the same shape; the mock config records the
+// pointer so tests can assert bundle selection.
+static esp_err_t esp_crt_bundle_attach(void* conf) { (void)conf; return 0; }
 #endif
 
 namespace Courier {
@@ -28,6 +34,7 @@ MqttTransport::MqttTransport()
 
 MqttTransport::MqttTransport(const Config& config)
     : _certPem(config.cert_pem),
+      _useCertBundle(config.use_cert_bundle),
       _taskStack(config.task_stack),
       _topics(config.topics.begin(), config.topics.end())
 {
@@ -158,6 +165,8 @@ void MqttTransport::begin()
     config.broker.address.uri = uri.c_str();
     if (_certPem) {
         config.broker.verification.certificate = _certPem;
+    } else if (_useCertBundle) {
+        config.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
     }
     config.credentials.client_id = _configClientId.empty() ? nullptr : _configClientId.c_str();
     config.task.stack_size = _taskStack;
@@ -165,6 +174,8 @@ void MqttTransport::begin()
     config.uri = uri.c_str();
     if (_certPem) {
         config.cert_pem = _certPem;
+    } else if (_useCertBundle) {
+        config.crt_bundle_attach = esp_crt_bundle_attach;
     }
     config.client_id = _configClientId.empty() ? nullptr : _configClientId.c_str();
     config.task_stack = _taskStack;

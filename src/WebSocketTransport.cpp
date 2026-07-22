@@ -1,10 +1,17 @@
 #include "WebSocketTransport.h"
 #include <cstring>
+#include <utility>
 
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp32-hal.h"  // millis() — Arduino.h conflicts with IDF websocket/lwip headers
+// Arduino-only builds (prebuilt arduino-esp32 core): WiFiClientSecure ships a
+// same-named esp_crt_bundle.h that shadows the IDF one and declares only
+// arduino_esp_crt_bundle_attach. The IDF symbol (and the default bundle data)
+// is still present in the prebuilt libmbedtls.a — declare it directly so both
+// include orders compile. Harmless redeclaration in hybrid/IDF builds.
+extern "C" esp_err_t esp_crt_bundle_attach(void* conf);
 static const char* TAG = "WSTransport";
 #else
 #include <Arduino.h>
@@ -13,9 +20,26 @@ static const char* TAG = "WSTransport";
 #define ESP_LOGW(tag, fmt, ...) printf("[%s] WARN: " fmt "\n", tag, ##__VA_ARGS__)
 #define ESP_LOGE(tag, fmt, ...) printf("[%s] ERROR: " fmt "\n", tag, ##__VA_ARGS__)
 static const char* TAG = "WSTransport";
+// Native tests: stand-in with the same shape; the mock config records the
+// pointer so tests can assert bundle selection.
+static esp_err_t esp_crt_bundle_attach(void* conf) { (void)conf; return 0; }
 #endif
 
 namespace Courier {
+
+// Old bundled esp_websocket_client copies (the IDF 4.x SDKs inside Arduino
+// 2.x cores) predate the crt_bundle_attach hook on the client config.
+// Detect the member at compile time: when absent, return false so begin()
+// falls back to the embedded root CA instead of failing to compile.
+template <typename C>
+static auto tryAttachCertBundle(C& cfg, int)
+    -> decltype((void)std::declval<C&>().crt_bundle_attach, bool())
+{
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    return true;
+}
+template <typename C>
+static bool tryAttachCertBundle(C&, long) { return false; }
 
 WebSocketTransport::WebSocketTransport()
 {
@@ -40,6 +64,7 @@ static const char* GTS_ROOT_R4_PEM =
 
 WebSocketTransport::WebSocketTransport(const Config& config)
     : _certPem(config.cert_pem),
+      _useCertBundle(config.use_cert_bundle),
       _useDefaultCerts(config.use_default_certs)
 {
 }
@@ -51,6 +76,9 @@ void WebSocketTransport::onConfigure(ConfigureCallback cb)
 
 void WebSocketTransport::useDefaultCerts()
 {
+    // Explicit call = explicit intent: pin to the embedded GTS Root R4
+    // instead of the certificate bundle.
+    _useCertBundle = false;
     _useDefaultCerts = true;
 }
 
@@ -98,6 +126,8 @@ void WebSocketTransport::begin()
     config.uri = uri.c_str();
     if (_certPem) {
         config.cert_pem = _certPem;
+    } else if (_useCertBundle && tryAttachCertBundle(config, 0)) {
+        // IDF certificate bundle attached (esp_crt_bundle_attach).
     } else if (_useDefaultCerts) {
         config.cert_pem = GTS_ROOT_R4_PEM;
     }

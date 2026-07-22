@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.5.1-dev
+
+### New
+
+- **IDF certificate bundle by default on `WebSocketTransport` and `MqttTransport`.** Both transport `Config`s gain `use_cert_bundle` (default `true`), wiring `esp_crt_bundle_attach` into the IDF client — the same default `HttpTransport` already had, and the bundle is already linked (0.5.0). TLS precedence per transport: `cert_pem` (pin) > cert bundle > WS-only embedded GTS Root R4 (`use_default_certs`, now the fallback for builds without `MBEDTLS_CERTIFICATE_BUNDLE`) > nothing. Consumers that pinned a root only to get TLS working (e.g. a Cloudflare-fronted host) can drop the pin and stop tracking CA rotations.
+- `WebSocketTransport::useDefaultCerts()` now expresses explicit intent: it disables the bundle and selects the embedded GTS Root R4 (previously it only set an already-default flag).
+- **Old WS clients degrade gracefully.** The bundled `esp_websocket_client` inside IDF 4.x Arduino cores predates the `crt_bundle_attach` config hook; the member is detected at compile time and such builds fall back to the embedded GTS Root R4 (the pre-0.5.1 behavior) instead of failing to compile.
+
+### Upgrading notes
+
+- **Behavior change:** with no `cert_pem` set, WS now validates against the certificate bundle instead of the embedded GTS Root R4 (strictly more permissive), and MQTT validates against the bundle instead of failing TLS setup with no verification option. Set `use_cert_bundle = false` to restore the old behavior.
+
+---
+
 ## v0.5.0
 
 Theme: receive-path memory — larger messages on no-PSRAM boards; `HttpTransport` hardening.

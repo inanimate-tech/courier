@@ -1,6 +1,6 @@
 # Courier API Reference
 
-Authoritative reference for the 0.4.0 API. For a tutorial-style introduction see [README.md](../README.md). For migration from 0.3.x see [migration-0.3-to-0.4.md](migration-0.3-to-0.4.md).
+Authoritative reference for the 0.5.x API. For a tutorial-style introduction see [README.md](../README.md). For migration from 0.3.x see [migration-0.3-to-0.4.md](migration-0.3-to-0.4.md).
 
 ## Header includes
 
@@ -9,6 +9,7 @@ Authoritative reference for the 0.4.0 API. For a tutorial-style introduction see
 | `<Courier.h>` | `Courier::Client`, `Courier::Config`, `Courier::State`, `Courier::Endpoint`, and the WebSocket transport (always pulled in) |
 | `<MqttTransport.h>` | `Courier::MqttTransport` |
 | `<UdpTransport.h>` | `Courier::UdpTransport` |
+| `<HttpTransport.h>` | `Courier::HttpTransport`, `Courier::Response`, and the `Courier::Http::Err*` sentinels |
 | `<WebSocketTransport.h>` | already included by `Courier.h`; include directly only if you reference the type without the manager |
 | `<Transport.h>` | `Courier::Transport` base class and `Courier::SendOptions` — needed only when subclassing |
 | `<Endpoint.h>` | `Courier::Endpoint` (also pulled in by `Courier.h`) |
@@ -154,11 +155,11 @@ struct Courier::SendOptions {
 
 Which fields each transport honours:
 
-| Field | WebSocketTransport | MqttTransport | UdpTransport |
-|-------|--------------------|---------------|--------------|
-| `topic` | ignored | **required** | ignored |
-| `qos` | ignored | honoured | ignored |
-| `retain` | ignored | honoured | ignored |
+| Field | WebSocketTransport | MqttTransport | UdpTransport | HttpTransport |
+|-------|--------------------|---------------|--------------|---------------|
+| `topic` | ignored | **required** | ignored | ignored |
+| `qos` | ignored | honoured | ignored | ignored |
+| `retain` | ignored | honoured | ignored | ignored |
 
 ```cpp
 // MQTT publish via Client::send:
@@ -333,14 +334,18 @@ Wraps `esp_websocket_client`. Always implicitly available via `<Courier.h>`.
 
 ```cpp
 Courier::WebSocketTransport::Config wsCfg;
-wsCfg.cert_pem = MY_PEM;          // override the default bundle
-wsCfg.use_default_certs = true;   // use Courier's built-in GTS Root R4
+wsCfg.cert_pem = MY_PEM;          // pin a CA — overrides the bundle
+wsCfg.use_cert_bundle = false;    // opt out of the IDF cert bundle
+wsCfg.use_default_certs = true;   // fall back to the embedded GTS Root R4
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `cert_pem` | `const char*` | `nullptr` | Specific CA cert PEM; overrides the built-in bundle when set |
-| `use_default_certs` | `bool` | `true` | Use Courier's built-in GTS Root R4 certificate |
+| `cert_pem` | `const char*` | `nullptr` | Pin a specific CA cert (PEM); overrides the bundle when set |
+| `use_cert_bundle` | `bool` | `true` | Validate against the IDF certificate bundle (`esp_crt_bundle_attach`) |
+| `use_default_certs` | `bool` | `true` | Fall back to Courier's embedded GTS Root R4 when the bundle is disabled |
+
+TLS precedence: `cert_pem` (pin) → `use_cert_bundle` (default) → `use_default_certs` (embedded GTS Root R4, the legacy fallback for builds without `MBEDTLS_CERTIFICATE_BUNDLE`) → nothing. `useDefaultCerts()` is the runtime equivalent of setting `use_cert_bundle = false` — it disables the bundle and selects the embedded root.
 
 ### Methods
 
@@ -395,7 +400,7 @@ Wraps `esp_mqtt_client`. Available via `<MqttTransport.h>`.
 Courier::MqttTransport::Config mqttCfg;
 mqttCfg.topics   = {"sensors/+/data", "commands/me"};
 mqttCfg.clientId = "my-device-001";
-mqttCfg.cert_pem = MY_PEM;
+mqttCfg.cert_pem = MY_PEM;         // pin a CA — overrides the bundle
 mqttCfg.task_stack = 8192;
 ```
 
@@ -403,8 +408,11 @@ mqttCfg.task_stack = 8192;
 |-------|------|---------|-------------|
 | `topics` | `std::vector<std::string>` | `{}` | Auto-subscribed on every (re)connect |
 | `clientId` | `const char*` | `nullptr` | MQTT client ID (`nullptr` = ESP-IDF generates one) |
-| `cert_pem` | `const char*` | `nullptr` | TLS certificate PEM |
+| `cert_pem` | `const char*` | `nullptr` | Pin a specific CA cert (PEM); overrides the bundle when set |
+| `use_cert_bundle` | `bool` | `true` | Validate against the IDF certificate bundle (`esp_crt_bundle_attach`) |
 | `task_stack` | `int` | `8192` | MQTT task stack size in bytes |
+
+TLS precedence: `cert_pem` (pin) → `use_cert_bundle` (default; requires `MBEDTLS_CERTIFICATE_BUNDLE`) → nothing.
 
 ### Methods
 
@@ -492,6 +500,122 @@ udp.send(doc);
 UDP is **non-persistent** — `isPersistent()` returns `false`, so it is excluded from failure escalation. A UDP transport going down does not trigger a WiFi reconnect.
 
 Incoming packets are dispatched to `Client::onMessage` if they parse as JSON. There is no per-transport receive hook on `UdpTransport`.
+
+## `Courier::HttpTransport`
+
+HTTPS, wrapping `esp_http_client`. Available via `<HttpTransport.h>`. A blocking, JS-shaped `fetch()` that is also a full transport citizen: `send(doc)` POSTs JSON to the `Config`-seeded endpoint, and JSON replies dispatch through `Client::onMessage`.
+
+Appliance posture: a fresh client per request, full teardown after — no keep-alive, no session state survives between fetches. Transport-failure retries flush the lwIP DNS cache between attempts (anycast re-roll). **Non-persistent** — `isPersistent()` returns `false`, so it is excluded from failure escalation.
+
+`fetch()` is **blocking**. Call it from `loop()`-dispatched callbacks (single task); a long fetch stalls other transports' draining for its duration.
+
+### `Config`
+
+```cpp
+Courier::HttpTransport::Config httpCfg;
+httpCfg.cert_pem = MY_PEM;          // pin a CA — overrides the bundle
+httpCfg.maxResponseBytes = 32 * 1024;
+httpCfg.timeoutMs = 10000;
+httpCfg.retries = 3;
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `cert_pem` | `const char*` | `nullptr` | Pin a specific CA cert (PEM); overrides the bundle when set |
+| `use_cert_bundle` | `bool` | `true` | Validate against the IDF certificate bundle (`esp_crt_bundle_attach`) |
+| `maxResponseBytes` | `size_t` | `16384` | Buffered-body cap; a larger body fails with `Http::ErrTooLarge` |
+| `timeoutMs` | `uint32_t` | `10000` | Per-request timeout (overridable per call) |
+| `retries` | `uint8_t` | `3` | Transport-failure retries (overridable per call; not applied to real HTTP statuses) |
+
+TLS precedence: `cert_pem` (pin) → `use_cert_bundle` (default) → nothing. There is no insecure mode.
+
+### Methods
+
+```cpp
+// Endpoint seeding happens automatically on addTransport<T> from Config.
+void setEndpoint(const char* host, uint16_t port, const char* path);
+
+// Blocking fetch — returns a Response value type:
+Response fetch(const char* url);
+Response fetch(const char* url, const FetchOptions& opts);
+Response get(const char* url);                          // sugar for fetch(url)
+Response postJson(const char* url, JsonDocument& doc);  // POST doc as JSON
+
+// JSON send (base virtual override) — POSTs to the Config-seeded endpoint;
+// a JSON reply dispatches through Client::onMessage:
+bool send(JsonDocument& doc, const SendOptions& options = {});
+
+// Per-transport receive hook for send() responses (like WS onText):
+void onMessage(MessageCallback cb);
+
+// Advanced:
+void onConfigure(ConfigureCallback cb);   // raw esp_http_client_config_t&
+```
+
+### `Response`
+
+Move-only value type returned by `fetch()`. Owns its buffered body (PSRAM-preferred heap).
+
+| Member | Description |
+|--------|-------------|
+| `int status` | HTTP status, or a `Http::Err*` sentinel below `100` for transport failures |
+| `long contentLength` | Server-declared length, or `-1` if unstated |
+| `bool ok()` | `true` for a 2xx status |
+| `bool reachedServer()` | `true` when `status >= 100` (a real HTTP status, not a transport error) |
+| `bool complete()` | `false` when the connection dropped before the promised body fully arrived |
+| `const char* text()` | Buffered body (NUL-terminated; `""` in streaming mode) |
+| `size_t size()` | Body byte length |
+| `bool json(JsonDocument& doc)` | Parse the body as JSON; returns `false` on empty body or parse error |
+| `const char* header(const char* name)` | Collected header (`Content-Type`, `Content-Length`, `Date`); `nullptr` if absent |
+
+Transport-failure sentinels (in `namespace Courier::Http`): `ErrNoWifi` (`-1000`), `ErrDns` (`-1001`, reserved), `ErrConnect` (`-1002`), `ErrTimeout` (`-1003`), `ErrTooLarge` (`-1004`), `ErrAborted` (`-1005`). Retries apply only to these; any real HTTP status is returned as-is.
+
+### `FetchOptions`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `method` | `const char*` | `nullptr` | Defaults to `"GET"`, or `"POST"` when a body/json is set |
+| `headers` / `headerCount` | `const Header*` / `size_t` | `nullptr` / `0` | Caller-owned array of `{name, value}` request headers |
+| `body` / `bodyLength` | `const char*` / `size_t` | `nullptr` / `0` | Raw request body (`bodyLength = 0` → `strlen(body)`) |
+| `json` | `JsonDocument*` | `nullptr` | Serialize as body with a JSON content-type |
+| `timeoutMs` | `int32_t` | `-1` | `-1` inherits `Config::timeoutMs` |
+| `retries` | `int16_t` | `-1` | `-1` inherits `Config::retries`; `0` disables retries |
+| `onResponse` | `ResponseCallback` | — | Streaming: fires once with `(status, contentLength)` before body chunks |
+| `onBody` | `BodyCallback` | — | Streaming: `(data, len)` per chunk; return `false` to abort (OTA-download shaped) |
+| `configure` | `ConfigureCallback` | — | Per-call raw-config trapdoor (`esp_http_client_config_t&`) |
+
+Setting `onBody` switches to streaming mode: the `Response` carries status and headers but no buffered body, and chunks arrive via the callback (abortable). Otherwise the body is buffered up to `maxResponseBytes`.
+
+```cpp
+auto& http = courier.addTransport<Courier::HttpTransport>("https");
+
+// Buffered GET:
+Courier::Response r = http.get("https://httpbin.org/get");
+if (r.ok()) {
+    JsonDocument doc;
+    if (r.json(doc)) { /* ... */ }
+}
+
+// POST JSON:
+JsonDocument body;
+body["type"] = "reading";
+Courier::Response p = http.postJson("https://example.com/ingest", body);
+
+// Streaming download (abortable):
+Courier::HttpTransport::FetchOptions opts;
+opts.onResponse = [](int status, long len) { /* size the sink */ };
+opts.onBody = [](const uint8_t* data, size_t len) {
+    // write chunk; return false to abort
+    return true;
+};
+http.fetch("https://example.com/firmware.bin", opts);
+
+http.onConfigure([](esp_http_client_config_t& cfg) {
+    cfg.buffer_size = 4096;   // event_handler / user_data are reserved
+});
+```
+
+`send(doc)` POSTs the serialized document to the `Config`-seeded endpoint (`host`/`port`/`path`, e.g. `defaultTransport = "https"`). A JSON reply also fires `Client::onMessage(transportName, type, doc)` — but only when the response is `complete()`; a truncated 2xx reply still reports `ok()` yet never reaches the hook. See the README's HTTPS section and `examples/https-only` for full sketches.
 
 ## `Courier::Endpoint`
 
