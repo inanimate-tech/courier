@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.6.0
+
+Theme: receive parallels send — `Client::onMessage` is the default-transport receive path, mirroring `Client::send`.
+
+### Breaking changes
+
+- **`Client::onMessage` now delivers only the default transport's messages.** Just as `Client::send(doc)` routes to `Config::defaultTransport` only, the client-level `onMessage` callback now fires only for JSON dispatched from that same transport. Other transports' messages no longer reach it — use their per-transport receive hooks instead: `WebSocketTransport::onText`/`onBinary`, `MqttTransport::onMessage(topic, payload, len)`, and the new `UdpTransport::onText`. Setting `Config::defaultTransport = nullptr` (or an empty transport name) now closes the default lane in both directions — `send()` already returned `false` with no default transport, and `onMessage` now delivers nothing either. This replaces any need for a per-transport "deliver upward to the client" flag: routing is symmetric, decided once by `defaultTransport`, and re-evaluated every dispatch so a runtime `setDefaultTransport()` switch takes effect immediately.
+
+### New
+
+- **`UdpTransport::onText(TextCallback cb)`** — raw per-packet receive hook `(const char* payload, size_t length)`, matching `WebSocketTransport::onText`. Since UDP is usually a non-default transport, this is its receive path now that `Client::onMessage` no longer sees it.
+
+---
+
 ## v0.5.1
 
 ### New

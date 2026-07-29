@@ -27,6 +27,13 @@ public:
 
     bool isPersistent() const override { return false; }
 
+    // Raw per-packet receive hook — fires for every multicast packet with the
+    // payload bytes (NUL-terminated scratch buffer, valid for the callback
+    // duration only). Same idiom as WebSocketTransport::onText. UDP is
+    // usually a non-default transport, so this is its receive path.
+    using TextCallback = MessageCallback;
+    void onText(TextCallback cb) { setMessageCallback(cb); }
+
 private:
     AsyncUDP _udp;
     std::atomic<bool> _joined{false};

@@ -95,7 +95,7 @@ public:
 
   void removeTransport(const char* name);
 
-  // --- Send (routes via defaultTransport) ---
+  // --- Send/receive both route via defaultTransport — see onMessage. ---
   // Returns false if no default transport is configured / registered, or
   // if the underlying transport's send() returns false.
   bool send(JsonDocument& doc);
