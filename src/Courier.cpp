@@ -514,6 +514,18 @@ bool Client::syncTimeFromHttpDate()
 void Client::dispatchJSON(const char* transportName, const char* payload, size_t length)
 {
   if (!_messageCallback) return;
+
+  // Receive parallels send: just as Client::send routes to the default
+  // transport only, Client-level onMessage delivers the default transport's
+  // messages only. Other transports deliver via their per-transport hooks
+  // (setMessageCallback / onText / MQTT topic-aware onMessage). Evaluated
+  // per dispatch so runtime setDefaultTransport() switches take effect
+  // without rewiring hooks.
+  const char* def = _defaultTransport.length() > 0
+      ? _defaultTransport.c_str()
+      : _config.defaultTransport;
+  if (!def || !def[0] || strcmp(transportName, def) != 0) return;
+
   JsonDocument doc;
   // The payload is a heap-owned scratch buffer freed right after this returns
   // (see Transport::drainPending contract), and the raw per-transport hook has

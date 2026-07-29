@@ -139,6 +139,11 @@ void test_on_message_callback() {
     int callCount = 0;
     std::string receivedType;
 
+    // setUp()'s Config leaves defaultTransport unset (matches
+    // test_client_send_returns_false_when_no_default_transport's premise for
+    // Client::send). onMessage now routes on the same defaultTransport, so
+    // this test must name "ws" explicitly to exercise delivery.
+    courier->setDefaultTransport("ws");
     courier->onMessage([&](const char* tname, const char* type, JsonDocument& doc) {
         callCount++;
         receivedType = type;
@@ -158,6 +163,7 @@ void test_on_message_single_slot() {
     int callCount1 = 0;
     int callCount2 = 0;
 
+    courier->setDefaultTransport("ws");  // see test_on_message_callback
     courier->onMessage([&](const char* tname, const char* type, JsonDocument& doc) { callCount1++; });
     // Second registration replaces the first (single-slot, like ws.onmessage)
     courier->onMessage([&](const char* tname, const char* type, JsonDocument& doc) { callCount2++; });
@@ -174,6 +180,7 @@ void test_on_message_single_slot() {
 
 void test_onMessage_only_fires_for_json() {
     int jsonCount = 0;
+    courier->setDefaultTransport("ws");  // see test_on_message_callback
     courier->onMessage([&](const char* tname, const char* type, JsonDocument& doc) { jsonCount++; });
     advanceToConnected();
     auto* mock = MockWebSocketClient::lastInstance();
@@ -283,6 +290,7 @@ void test_dns_config_custom_servers() {
 
 void test_message_callback_receives_transport_name() {
     std::string seenName;
+    courier->setDefaultTransport("ws");  // see test_on_message_callback
     courier->onMessage([&](const char* tname, const char* type, JsonDocument& doc) {
         seenName = tname ? tname : "";
     });
@@ -694,6 +702,75 @@ void test_ntp_bridge_rebridges_on_divergence() {
     TEST_ASSERT_EQUAL(1771417000, (long)Courier::systemClockForTests);
 }
 
+// --- Receive parallels send: onMessage is the default transport's lane only ---
+
+void test_onmessage_fires_for_default_transport_only(void) {
+    Config cfg("example.com", 443, "/", "TestAP", "a");
+    Client client(cfg);
+    auto& a = client.addTransport<MockTransport>("a");
+    auto& b = client.addTransport<MockTransport>("b");
+
+    static int count; static std::string lastType;
+    count = 0; lastType = "";
+    client.onMessage([](const char* tn, const char* type, JsonDocument&) {
+        count++; lastType = type;
+    });
+
+    a.simulateMessage("{\"type\":\"from_a\"}");
+    b.simulateMessage("{\"type\":\"from_b\"}");
+    a.loop(); b.loop();
+
+    TEST_ASSERT_EQUAL_INT(1, count);
+    TEST_ASSERT_EQUAL_STRING("from_a", lastType.c_str());
+}
+
+void test_non_default_transport_still_delivers_raw_hook(void) {
+    Config cfg("example.com", 443, "/", "TestAP", "a");
+    Client client(cfg);
+    auto& a = client.addTransport<MockTransport>("a");
+    auto& b = client.addTransport<MockTransport>("b");
+    (void)a;
+
+    static int rawCount; rawCount = 0;
+    b.setMessageCallback([](const char*, size_t) { rawCount++; });
+
+    b.simulateMessage("{\"type\":\"from_b\"}");
+    b.loop();
+
+    TEST_ASSERT_EQUAL_INT(1, rawCount);
+}
+
+void test_setdefaulttransport_switches_dispatch_at_runtime(void) {
+    Config cfg("example.com", 443, "/", "TestAP", "a");
+    Client client(cfg);
+    auto& a = client.addTransport<MockTransport>("a");
+    auto& b = client.addTransport<MockTransport>("b");
+
+    static int count; count = 0;
+    client.onMessage([](const char*, const char*, JsonDocument&) { count++; });
+
+    client.setDefaultTransport("b");
+    a.simulateMessage("{\"type\":\"x\"}");
+    b.simulateMessage("{\"type\":\"y\"}");
+    a.loop(); b.loop();
+
+    TEST_ASSERT_EQUAL_INT(1, count);   // only b dispatched
+}
+
+void test_null_default_transport_closes_receive_lane(void) {
+    Config cfg(nullptr, 443, "/", "TestAP", nullptr);  // no host: no auto-WS
+    Client client(cfg);
+    auto& a = client.addTransport<MockTransport>("a");
+
+    static int count; count = 0;
+    client.onMessage([](const char*, const char*, JsonDocument&) { count++; });
+
+    a.simulateMessage("{\"type\":\"x\"}");
+    a.loop();
+
+    TEST_ASSERT_EQUAL_INT(0, count);
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
 
@@ -736,6 +813,11 @@ int main(int argc, char** argv) {
     RUN_TEST(test_time_sync_rejects_date_before_build);
     RUN_TEST(test_time_sync_rejects_date_too_far_in_future);
     RUN_TEST(test_ntp_bridge_rebridges_on_divergence);
+
+    RUN_TEST(test_onmessage_fires_for_default_transport_only);
+    RUN_TEST(test_non_default_transport_still_delivers_raw_hook);
+    RUN_TEST(test_setdefaulttransport_switches_dispatch_at_runtime);
+    RUN_TEST(test_null_default_transport_closes_receive_lane);
 
     return UNITY_END();
 }
