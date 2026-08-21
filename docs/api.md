@@ -390,6 +390,25 @@ ws.onConfigure([](esp_websocket_client_config_t& cfg) {
 });
 ```
 
+### Tagged binary frames
+
+A 1-byte application-defined channel tag can ride inside each binary frame,
+letting one WebSocket multiplex several binary lanes (e.g. audio on one tag,
+tunnelled MQTT on another). Mechanism only — tag values are the
+application's contract with its server.
+
+```cpp
+bool sendBinaryTagged(uint8_t tag, const uint8_t* data, size_t len);
+void onBinaryTagged(TaggedBinaryCallback cb);  // (uint8_t tag, const uint8_t* data, size_t len)
+```
+
+`sendBinaryTagged` sends one WS frame whose first byte is `tag`.
+`onBinaryTagged` delivers every inbound binary frame with the tag split off
+and the payload pointer advanced past it; empty frames are dropped.
+Registering it claims the single binary receive slot (last registration
+wins, like every Courier callback), replacing any `onBinary` handler — the
+connection is then expected to speak tagged frames exclusively.
+
 ## `Courier::MqttTransport`
 
 Wraps `esp_mqtt_client`. Available via `<MqttTransport.h>`.
@@ -479,6 +498,76 @@ mqtt.onConfigure([](esp_mqtt_client_config_t& cfg) {
 #endif
 });
 ```
+
+## `Courier::TunnelMqttTransport`
+
+MQTT 3.1.1 (QoS 0 only) over a caller-supplied byte pipe instead of an owned
+network connection. Available via `<TunnelMqttTransport.h>`. Use it to
+collapse MQTT's separate TLS session into a socket that already exists —
+typically a `WebSocketTransport`'s tagged binary frames.
+
+### `Config`
+
+```cpp
+struct Config {
+    const char* clientId = nullptr;   // MQTT client id ("courier-tunnel" if empty)
+    uint16_t keepAliveSec = 60;       // PINGREQ at half this; dead at 1.5x with no inbound
+    size_t maxInboundPacket = 64 * 1024;  // larger inbound packets reset the session
+};
+```
+
+### Pipe wiring (host side)
+
+```cpp
+void setPipeSend(PipeSendFn fn);          // outbound packets -> bool(const uint8_t*, size_t)
+void notifyPipeUp(bool up);               // carrier state; true triggers CONNECT
+void injectBytes(const uint8_t*, size_t); // inbound bytes from the carrier
+```
+
+The transport sends CONNECT once `begin()` has run, the pipe is up, and a
+pipe-send function is set. After CONNACK it replays every registered
+subscription — including after reconnects, so consumers never resubscribe
+manually. A keepalive timeout or a pipe drop marks the transport
+disconnected (normal `ConnectionCallback` delivery) and reconnection is
+automatic while the pipe is up.
+
+Wiring to a `WebSocketTransport` (tag values are the application's choice):
+
+```cpp
+auto& ws = courier.transport<Courier::WebSocketTransport>("ws");
+auto& mqtt = courier.addTransport<Courier::TunnelMqttTransport>("mqtt");
+
+constexpr uint8_t kTagMqtt = 0x01;
+mqtt.setPipeSend([&ws](const uint8_t* d, size_t n) {
+    return ws.sendBinaryTagged(kTagMqtt, d, n);
+});
+ws.onBinaryTagged([&mqtt](uint8_t tag, const uint8_t* d, size_t n) {
+    if (tag == kTagMqtt) mqtt.injectBytes(d, n);
+});
+ws.setConnectionCallback([&mqtt](Courier::Transport*, bool up) {
+    mqtt.notifyPipeUp(up);
+});
+```
+
+### Methods
+
+The `MqttTransport` API subset consumers use, signature-compatible:
+
+```cpp
+void setClientId(const char* id);
+bool subscribe(const char* topic, int qos = 0);      // qos accepted, requested as 0
+void unsubscribe(const char* topic);
+bool publish(const char* topic, const char* payload, int qos = 0, bool retain = false);
+bool publish(const char* topic, JsonDocument& doc, int qos = 0, bool retain = false);
+void onMessage(TopicMessageCallback cb);             // (topic, payload, len)
+bool send(JsonDocument& doc, const SendOptions& options);  // requires options.topic
+```
+
+QoS and retain arguments are accepted for drop-in compatibility and always
+sent as QoS 0 / no retain (logged when downgraded). Up to 8 concurrent
+subscriptions. `publish()` may be called from tasks other than the loop
+task; all other calls belong on the loop task.
+
 
 ## `Courier::UdpTransport`
 
