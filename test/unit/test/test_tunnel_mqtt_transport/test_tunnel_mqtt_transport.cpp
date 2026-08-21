@@ -385,6 +385,20 @@ void test_disconnect_sends_disconnect_packet() {
     TEST_ASSERT_FALSE(tunnel->isConnected());
 }
 
+void test_connect_retry_backoff_when_pipe_write_fails() {
+    tunnel = createTunnel();
+    pipeSendResult = false;
+    tunnel->begin();
+    tunnel->notifyPipeUp(true);  // CONNECT attempt fails at the pipe
+    TEST_ASSERT_EQUAL(0, pipeFrames.size());
+    pipeSendResult = true;
+    tunnel->loop();  // still inside the retry backoff — no attempt
+    TEST_ASSERT_EQUAL(0, countPackets(0x10));
+    _mock_millis += 1001;
+    tunnel->loop();  // backoff elapsed — CONNECT goes out
+    TEST_ASSERT_EQUAL(1, countPackets(0x10));
+}
+
 void test_is_persistent() {
     tunnel = createTunnel();
     TEST_ASSERT_TRUE(tunnel->isPersistent());
@@ -420,6 +434,7 @@ int main(int, char**) {
     RUN_TEST(test_pipe_down_disconnects);
     RUN_TEST(test_disconnect_sends_disconnect_packet);
     RUN_TEST(test_pipe_up_again_reconnects);
+    RUN_TEST(test_connect_retry_backoff_when_pipe_write_fails);
     RUN_TEST(test_is_persistent);
     RUN_TEST(test_name);
     return UNITY_END();

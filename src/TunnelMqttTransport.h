@@ -73,6 +73,7 @@ private:
 
     static constexpr int kMaxSubscriptions = 8;
     static constexpr unsigned long kConnackTimeoutMs = 10000;
+    static constexpr unsigned long kConnectRetryMs = 1000;
 
     bool pipeWrite(const uint8_t* data, size_t len);
     void maybeConnect();
@@ -92,6 +93,9 @@ private:
     unsigned long _lastTxMs = 0;
     unsigned long _lastRxMs = 0;
     unsigned long _connectSentMs = 0;
+    // Set after a failed/refused CONNECT so retries pace at
+    // kConnectRetryMs even when maybeConnect() is polled every tick.
+    unsigned long _connectBlockedUntilMs = 0;
     uint16_t _packetId = 0;
 
     std::string _subscriptions[kMaxSubscriptions];

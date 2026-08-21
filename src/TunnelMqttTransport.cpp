@@ -55,6 +55,8 @@ bool TunnelMqttTransport::pipeWrite(const uint8_t* data, size_t len) {
 
 void TunnelMqttTransport::maybeConnect() {
     if (!_began || !_pipeUp || _state != State::Down) return;
+    unsigned long now = millis();
+    if (_connectBlockedUntilMs && now < _connectBlockedUntilMs) return;
     uint8_t buf[160];
     const char* id = _clientId.empty() ? "courier-tunnel" : _clientId.c_str();
     size_t n = MqttCodec::encodeConnect(buf, sizeof(buf), id,
@@ -65,8 +67,10 @@ void TunnelMqttTransport::maybeConnect() {
     }
     if (!pipeWrite(buf, n)) {
         ESP_LOGW(TAG, "CONNECT send failed (pipe down?)");
+        _connectBlockedUntilMs = now + kConnectRetryMs;
         return;
     }
+    _connectBlockedUntilMs = 0;
     _decoder.reset();
     _state = State::Connecting;
     _connectSentMs = millis();
@@ -133,6 +137,7 @@ void TunnelMqttTransport::handlePacket(const MqttCodec::Packet& pkt) {
             ESP_LOGW(TAG, "CONNACK refused (rc=%u)",
                      (unsigned)pkt.connackReturnCode);
             _state = State::Down;
+            _connectBlockedUntilMs = millis() + kConnectRetryMs;
             return;
         }
         _state = State::Connected;
@@ -256,6 +261,10 @@ void TunnelMqttTransport::loop() {
             _state = State::Down;
             maybeConnect();
         }
+    } else {
+        // Down with the pipe up (failed write, refused CONNACK): retry,
+        // paced by _connectBlockedUntilMs.
+        maybeConnect();
     }
 
     drainPending();
