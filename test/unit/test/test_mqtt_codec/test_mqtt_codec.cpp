@@ -1,6 +1,7 @@
 #include <unity.h>
 #include <MqttCodec.h>
 #include <cstring>
+#include <string>
 #include <vector>
 
 using namespace Courier::MqttCodec;
