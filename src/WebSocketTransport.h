@@ -37,6 +37,23 @@ public:
     void onText(TextCallback cb)   { setMessageCallback(cb); }
     void onBinary(BinaryCallback cb) { setBinaryMessageCallback(cb); }
 
+    // Tagged binary frames: a 1-byte application-defined channel tag,
+    // prefixed on send and stripped on receive. Mechanism only — tag values
+    // are the application's contract. Registering onBinaryTagged claims the
+    // single binary receive slot (last registration wins, as everywhere in
+    // Courier), so it replaces any onBinary handler: every binary frame is
+    // then treated as tagged, and empty frames are dropped.
+    using TaggedBinaryCallback =
+        std::function<void(uint8_t tag, const uint8_t* data, size_t length)>;
+    void onBinaryTagged(TaggedBinaryCallback cb) {
+        _onTaggedBinary = std::move(cb);
+        setBinaryMessageCallback([this](const uint8_t* data, size_t len) {
+            if (!_onTaggedBinary || len < 1) return;
+            _onTaggedBinary(data[0], data + 1, len - 1);
+        });
+    }
+    bool sendBinaryTagged(uint8_t tag, const uint8_t* data, size_t len);
+
     using Transport::begin;  // unhide 3-arg sugar
     void begin() override;
     void disconnect() override;
@@ -62,6 +79,7 @@ private:
     bool _useCertBundle = true;
     bool _useDefaultCerts = true;
     ConfigureCallback _configureCallback;
+    TaggedBinaryCallback _onTaggedBinary;
 
     esp_websocket_client_handle_t _client = nullptr;
     std::atomic<bool> _connected{false};

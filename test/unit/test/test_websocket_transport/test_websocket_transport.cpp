@@ -343,6 +343,77 @@ void test_onBinary_receives_binary_frames() {
     TEST_ASSERT_EQUAL(1, binaryCount);
 }
 
+// Tagged binary frames: a 1-byte channel tag prefixed on send and stripped
+// on receive, negotiated by the application (mechanism only — no tag values
+// are reserved here).
+void test_sendBinaryTagged_prefixes_tag_byte() {
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    client->simulateConnect();
+    const uint8_t payload[] = {0x10, 0x0F, 0xAB};
+    TEST_ASSERT_TRUE(ws->sendBinaryTagged(0x01, payload, sizeof(payload)));
+    TEST_ASSERT_EQUAL(1, client->binarySendCount);
+    TEST_ASSERT_EQUAL(sizeof(payload) + 1, client->sentBinary[0].size());
+    TEST_ASSERT_EQUAL_HEX8(0x01, (uint8_t)client->sentBinary[0][0]);
+    TEST_ASSERT_EQUAL_MEMORY(payload, client->sentBinary[0].data() + 1,
+                             sizeof(payload));
+}
+
+void test_sendBinaryTagged_fails_when_disconnected() {
+    ws->begin("host", 443, "/path");
+    const uint8_t payload[] = {0x01};
+    TEST_ASSERT_FALSE(ws->sendBinaryTagged(0x00, payload, sizeof(payload)));
+}
+
+void test_onBinaryTagged_delivers_tag_and_stripped_payload() {
+    int taggedCount = 0;
+    uint8_t lastTag = 0xFF;
+    std::string lastData;
+    ws->onBinaryTagged([&](uint8_t tag, const uint8_t* data, size_t len) {
+        taggedCount++;
+        lastTag = tag;
+        lastData.assign((const char*)data, len);
+    });
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    const uint8_t frame[] = {0x01, 'a', 'b'};
+    client->simulateBinaryMessage(frame, sizeof(frame));
+    ws->loop();
+    TEST_ASSERT_EQUAL(1, taggedCount);
+    TEST_ASSERT_EQUAL_HEX8(0x01, lastTag);
+    TEST_ASSERT_EQUAL(2, lastData.size());
+    TEST_ASSERT_EQUAL_STRING("ab", lastData.c_str());
+}
+
+void test_onBinaryTagged_takes_precedence_over_onBinary() {
+    int taggedCount = 0;
+    ws->onBinaryTagged([&](uint8_t, const uint8_t*, size_t) { taggedCount++; });
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    const uint8_t frame[] = {0x00, 0x42};
+    client->simulateBinaryMessage(frame, sizeof(frame));
+    ws->loop();
+    TEST_ASSERT_EQUAL(1, taggedCount);
+    // setUp's setBinaryMessageCallback slot must NOT also fire.
+    TEST_ASSERT_EQUAL(0, deliveredBinaryCount);
+}
+
+void test_onBinaryTagged_tolerates_tag_only_frame() {
+    int taggedCount = 0;
+    size_t lastLen = 999;
+    ws->onBinaryTagged([&](uint8_t, const uint8_t*, size_t len) {
+        taggedCount++;
+        lastLen = len;
+    });
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    const uint8_t frame[] = {0x01};
+    client->simulateBinaryMessage(frame, sizeof(frame));
+    ws->loop();
+    TEST_ASSERT_EQUAL(1, taggedCount);
+    TEST_ASSERT_EQUAL(0, lastLen);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_name_is_ws);
@@ -370,5 +441,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_binary_chunked_message_reassembled);
     RUN_TEST(test_onText_receives_text_frames);
     RUN_TEST(test_onBinary_receives_binary_frames);
+    RUN_TEST(test_sendBinaryTagged_prefixes_tag_byte);
+    RUN_TEST(test_sendBinaryTagged_fails_when_disconnected);
+    RUN_TEST(test_onBinaryTagged_delivers_tag_and_stripped_payload);
+    RUN_TEST(test_onBinaryTagged_takes_precedence_over_onBinary);
+    RUN_TEST(test_onBinaryTagged_tolerates_tag_only_frame);
     return UNITY_END();
 }

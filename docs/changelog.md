@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+Theme: single TLS session — MQTT can ride the existing WebSocket instead of opening its own connection.
+
+### New
+
+- **`TunnelMqttTransport`** — MQTT 3.1.1 (QoS 0 only) spoken over a caller-supplied byte pipe instead of an owned network connection. Exposes the `MqttTransport` API subset consumers use (`setClientId`, `subscribe`/`unsubscribe`, `publish`, topic-aware `onMessage`, `send(doc, opts)` with `opts.topic`); QoS/retain arguments are accepted for signature compatibility and always sent as QoS 0. The host wires the pipe with `setPipeSend(fn)`, feeds inbound bytes to `injectBytes()`, and signals carrier state with `notifyPipeUp(bool)` — typically all three wired to a `WebSocketTransport`'s tagged binary frames, collapsing MQTT's separate TLS session (~33 KB of internal RAM on ESP32-S3, plus the esp-mqtt task) into the socket that already exists. Keepalive is PINGREQ/PINGRESP with a 1.5× timeout that marks the transport disconnected and re-CONNECTs; subscriptions replay automatically after every reconnect.
+- **`MqttCodec`** — the QoS-0 packet codec underneath (`encodeConnect`/`Subscribe`/`Unsubscribe`/`Publish`/`PingReq`/`Disconnect`, plus an incremental `Decoder` that tolerates arbitrary byte-stream splits and skips packet types outside the subset). Public, host-testable, no dependencies.
+- **`WebSocketTransport` tagged binary frames** — `sendBinaryTagged(tag, data, len)` prefixes a 1-byte application-defined channel tag inside the same WS frame; `onBinaryTagged(cb)` delivers `(tag, data, len)` with the tag stripped. Mechanism only: no tag values are reserved. Registering `onBinaryTagged` claims the single binary receive slot (last registration wins), replacing any `onBinary` handler.
+
+---
+
 ## v0.6.0
 
 Theme: receive parallels send — `Client::onMessage` is the default-transport receive path, mirroring `Client::send`.

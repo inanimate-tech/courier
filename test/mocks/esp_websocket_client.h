@@ -80,6 +80,7 @@ public:
 
     static constexpr int MAX_SENT = 16;
     std::string sentMessages[MAX_SENT];
+    std::string sentBinary[MAX_SENT];
     int sendCount = 0;
     int binarySendCount = 0;
 
@@ -217,8 +218,11 @@ inline int esp_websocket_client_send_bin(
     esp_websocket_client_handle_t client,
     const char* data, int len, uint32_t timeout)
 {
-    (void)data; (void)timeout;
+    (void)timeout;
     if (!client->connected) return -1;
+    if (client->binarySendCount < MockWebSocketClient::MAX_SENT) {
+        client->sentBinary[client->binarySendCount] = std::string(data, len);
+    }
     client->binarySendCount++;
     return len;
 }

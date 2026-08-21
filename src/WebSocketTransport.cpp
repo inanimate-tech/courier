@@ -209,6 +209,26 @@ bool WebSocketTransport::sendBinary(const uint8_t* data, size_t len)
     return result >= 0;  // on timeout/error the caller (Fix B) defers/retries
 }
 
+bool WebSocketTransport::sendBinaryTagged(uint8_t tag, const uint8_t* data,
+                                          size_t len)
+{
+    if (!_connected.load(std::memory_order_acquire) || !_client) return false;
+    // The tag must ride in the same WS frame, so build a prefixed copy.
+    // PSRAM-preferring: this path carries voice PCM at frame rate.
+#ifdef ESP_PLATFORM
+    uint8_t* buf = (uint8_t*)heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM);
+    if (!buf) buf = (uint8_t*)heap_caps_malloc(len + 1, MALLOC_CAP_8BIT);
+#else
+    uint8_t* buf = (uint8_t*)malloc(len + 1);
+#endif
+    if (!buf) return false;
+    buf[0] = tag;
+    memcpy(buf + 1, data, len);
+    bool ok = sendBinary(buf, len + 1);
+    free(buf);
+    return ok;
+}
+
 void WebSocketTransport::suspend()
 {
     if (_client) {
