@@ -90,7 +90,7 @@ See [examples/https-only](examples/https-only/https-only.ino) for the full sketc
 
 - **WiFi** — captive portal config via WiFiManager, auto-reconnection
 - **WebSocket** — built-in transport with TLS, ping/pong heartbeat, self-healing auto-reconnect
-- **MQTT** — opt-in transport with subscribe/unsubscribe, topic-addressed publishing, self-healing auto-reconnect
+- **MQTT** — opt-in transport with subscribe/unsubscribe, topic-addressed publishing (text or NUL-safe binary), self-healing auto-reconnect
 - **UDP multicast** — opt-in transport for local network discovery and messaging
 - **HTTPS** — opt-in transport with a JS-shaped `fetch()` (buffered or streaming), plus `send()`/`onMessage` for the messaging idiom
 - **Self-healing** — transports auto-reconnect independently; if all persistent transports fail after 60s, Courier escalates to full WiFi reconnection
@@ -176,6 +176,7 @@ courier.send(doc, opts);                    // MQTT with per-call topic
 courier.transport<Courier::WebSocketTransport>("ws").sendText(payload);
 courier.transport<Courier::WebSocketTransport>("ws").sendBinary(data, len);
 courier.transport<Courier::MqttTransport>("mqtt").publish("topic", payload);
+courier.transport<Courier::MqttTransport>("mqtt").publishBinary("topic", data, len);
 
 // Transports — Client constructs and owns
 auto& mqtt = courier.addTransport<Courier::MqttTransport>("mqtt", mqttCfg);
@@ -193,6 +194,8 @@ auto& ws = courier.transport<Courier::WebSocketTransport>("ws");
 ws.onText  ([](const char* p, size_t l)    { });
 ws.onBinary([](const uint8_t* d, size_t l) { });
 mqtt.onMessage([](const char* topic, const char* p, size_t l) { });
+mqtt.subscribeBinary("topic/audio");   // declares the lane: bytes, never JSON
+mqtt.onBinary([](const char* topic, const uint8_t* d, size_t l) { });
 
 // Raw ESP-IDF config access
 ws.onConfigure  ([](esp_websocket_client_config_t& cfg) { });

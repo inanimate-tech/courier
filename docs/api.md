@@ -266,7 +266,7 @@ Optional overrides (with sensible defaults):
 | `suspend()` / `resume()` | no-ops | OTA hook |
 | `setEndpoint(host, port, path)` | copies into `_host`/`_port`/`_path` | Override only if you need custom endpoint validation |
 
-Note: `sendBinary` and `publish` are **not** on the base. `WebSocketTransport::sendBinary` is WS-specific. `MqttTransport::publish` is MQTT-specific. Custom transports are not required to implement either.
+Note: `sendBinary` and `publish` are **not** on the base. `WebSocketTransport::sendBinary` is WS-specific. `MqttTransport::publish` / `publishBinary` are MQTT-specific. Custom transports are not required to implement either.
 
 ## Transports — registration and access
 
@@ -399,18 +399,24 @@ Wraps `esp_mqtt_client`. Available via `<MqttTransport.h>`.
 ```cpp
 Courier::MqttTransport::Config mqttCfg;
 mqttCfg.topics   = {"sensors/+/data", "commands/me"};
+mqttCfg.binaryTopics = {"devices/me/audio"};   // opaque bytes, never JSON-parsed
 mqttCfg.clientId = "my-device-001";
 mqttCfg.cert_pem = MY_PEM;         // pin a CA — overrides the bundle
 mqttCfg.task_stack = 8192;
+mqttCfg.out_buffer_size = 2048;    // 0 = IDF default (1024)
+mqttCfg.network_timeout_ms = 5000; // 0 = IDF default (10000)
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `topics` | `std::vector<std::string>` | `{}` | Auto-subscribed on every (re)connect |
+| `binaryTopics` | `std::vector<std::string>` | `{}` | As `topics`, but payloads are delivered to `onBinary` and never enter the text/JSON lane |
 | `clientId` | `const char*` | `nullptr` | MQTT client ID (`nullptr` = ESP-IDF generates one) |
 | `cert_pem` | `const char*` | `nullptr` | Pin a specific CA cert (PEM); overrides the bundle when set |
 | `use_cert_bundle` | `bool` | `true` | Validate against the IDF certificate bundle (`esp_crt_bundle_attach`) |
 | `task_stack` | `int` | `8192` | MQTT task stack size in bytes |
+| `out_buffer_size` | `int` | `0` | Outbound buffer in bytes; `0` leaves the IDF default (1024) |
+| `network_timeout_ms` | `int` | `0` | Network operation timeout; `0` leaves the IDF default (10000) |
 
 TLS precedence: `cert_pem` (pin) → `use_cert_bundle` (default; requires `MBEDTLS_CERTIFICATE_BUNDLE`) → nothing.
 
@@ -424,18 +430,26 @@ void setEndpoint(const char* host, uint16_t port, const char* path);
 // JSON send (base virtual override) — requires opts.topic; serializes and publishes:
 bool send(JsonDocument& doc, const SendOptions& options = {});
 
-// Raw text publish:
+// Raw text publish — length is strlen(payload):
 bool publish(const char* topic, const char* payload, int qos = 0, bool retain = false);
+
+// Opaque byte publish — explicit length, NUL-safe:
+bool publishBinary(const char* topic, const uint8_t* data, size_t len,
+                   int qos = 0, bool retain = false);
 
 // JSON publish sugar — serializes doc and publishes:
 bool publish(const char* topic, JsonDocument& doc, int qos = 0, bool retain = false);
 
-void subscribe  (const char* topic, int qos = 0);
-void unsubscribe(const char* topic);
+void subscribe      (const char* topic, int qos = 0);
+void subscribeBinary(const char* topic, int qos = 0);
+void unsubscribe    (const char* topic);
+
+static bool topicMatches(const char* filter, const char* topic);  // '+' and '#'
 
 void setClientId(const char* clientId);   // before begin()
 
 void onMessage(TopicMessageCallback cb);  // (topic, payload, len)
+void onBinary (TopicBinaryCallback cb);   // (topic, data, len)
 
 void onConfigure(ConfigureCallback cb);   // raw esp_mqtt_client_config_t&
 ```
@@ -444,7 +458,37 @@ void onConfigure(ConfigureCallback cb);   // raw esp_mqtt_client_config_t&
 
 `publish(topic, JsonDocument&, qos, retain)` is a JSON convenience overload added in 0.4.0 — it serializes `doc` and forwards to the raw text `publish`.
 
-`subscribe` / `unsubscribe` mutate a managed topic list. Subscriptions are reapplied automatically on every (re)connect.
+`subscribe` / `subscribeBinary` / `unsubscribe` mutate a managed topic list. Subscriptions are reapplied automatically on every (re)connect, at the QoS they were registered with.
+
+### Binary payloads
+
+`publish(topic, const char*)` takes its length from `strlen`. That is not a style choice you can ignore: `esp_mqtt_client_publish` treats a zero length as "call `strlen(data)`", so handing it a buffer that is not NUL-terminated reads past the end of the allocation. PCM audio, images and protobuf all contain NUL bytes.
+
+Use `publishBinary` for anything that is not a C string. It passes a real length, and it rejects `data == nullptr`, `len == 0` and `len > INT_MAX` rather than letting the `strlen` branch fire. A genuinely empty payload — clearing a retained topic, say — is a text publish: `publish(topic, "", qos, retain)`.
+
+On the receive side, MQTT 3.1.1 carries no content-type on the wire, so the subscriber declares which topics are opaque:
+
+```cpp
+mqtt.subscribeBinary("devices/me/audio");
+
+mqtt.onBinary([](const char* topic, const uint8_t* data, size_t len) {
+    // No NUL-termination contract. `len` is authoritative.
+});
+```
+
+A payload arriving on a filter registered via `subscribeBinary` (or `Config::binaryTopics`) goes to `onBinary` and **never** to `onMessage` or to `Client`'s JSON lane — so `Client::onMessage` does not attempt to parse it even when MQTT is the default transport. Matching uses `topicMatches`, so wildcard filters (`devices/+/audio`) route correctly for the concrete topic the broker delivers. Registering the same filter with both `subscribe` and `subscribeBinary` is allowed; the last call decides the lane.
+
+### Publishing from a second task
+
+`publish` / `publishBinary` are safe to call from a task other than the one running `loop()`.
+
+esp-mqtt is already thread-safe for concurrent calls: `esp_mqtt_client_publish`, `subscribe`, `unsubscribe`, `start` and `stop` each take an internal API lock. What it does not protect is the handle's lifetime — `esp_mqtt_client_destroy` takes no lock and frees the client outright. So Courier holds its own lock across `begin`, `disconnect`, `suspend` and `resume`, and the publish path takes it with a 250 ms bound (`MqttTransport::PUBLISH_LOCK_TIMEOUT_MS`), returning `false` rather than waiting out a teardown. A realtime sender treats that `false` as "defer, retry next tick". Without it, a reconnect escalation on the app task can free the client underneath an in-flight publish on a send task.
+
+What the bound does **not** cover is a socket write already in progress inside ESP-IDF. IDF's API lock has no timeout, and the IDF client task holds it across a reconnect — transport connect, TLS handshake and CONNACK wait, each bounded by `network_timeout_ms` (default 10 s). A lone publisher entering a busy client still waits on IDF; the 250 ms bound is what stops a *second* caller piling up behind it or behind a teardown. Lower `network_timeout_ms` to shorten that worst case, remembering it also bounds the handshake and that hitting it aborts the connection.
+
+`out_buffer_size` is worth setting if you publish a fixed frame size. A payload larger than the outbound buffer is written in chunks — a 1920-byte audio frame against the default 1024 is two writes and two TLS records. Sizing the buffer past the frame makes it one, for the cost of the extra internal RAM.
+
+**Sized for control-rate traffic.** The inbound path is a depth-8 SPSC queue with a heap-allocated topic per message, drained on the app task at `loop()` cadence. That is right for commands, status and occasional blobs. It is *not* sized for a sustained high-rate stream — a 16.7 fps audio downlink overflows it within half a second of a slow `loop()`, and the drops are silent apart from a log line. Delivering a stream like that would need a different inbound path (dispatch on the MQTT task rather than through the app-task queue); treat this as a known boundary, not a bug to be filed.
 
 `onMessage(topic, payload, len)` fires for every incoming MQTT message. **`Client::onMessage(transportName, type, doc)` also fires** when the payload parses as JSON. For non-JSON or topic-routed code, use the per-transport hook.
 
@@ -462,6 +506,9 @@ mqtt.publish("alerts/critical", payload, /*qos=*/1, /*retain=*/true);
 
 // JSON publish sugar:
 mqtt.publish("sensors/me/data", doc);
+
+// Bytes, with a real length:
+mqtt.publishBinary("devices/me/audio", frame, frameLen);
 
 mqtt.onMessage([](const char* topic, const char* p, size_t len) {
     // topic-aware dispatch
