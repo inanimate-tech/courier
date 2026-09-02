@@ -1,10 +1,13 @@
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
 #include <functional>
 #include <string>
+#include <thread>
 
 #ifndef ESP_OK
 typedef int esp_err_t;
@@ -68,6 +71,8 @@ typedef struct {
     void* user_context;
     int task_stack;
     int buffer_size;
+    int out_buffer_size;
+    int network_timeout_ms;
 } esp_mqtt_client_config_t;
 
 class MockMqttClient {
@@ -80,6 +85,12 @@ public:
     esp_err_t (*crt_bundle_attach)(void*) = nullptr;
     std::string clientId;
     bool disable_auto_reconnect = false;
+    int out_buffer_size = 0;
+    int network_timeout_ms = 0;
+
+    // Set by a test to hold a publish inside the client, so the caller's
+    // bounded-wait lock can be observed from another thread.
+    std::atomic<bool> blockPublish{false};
 
     bool connected = false;
     bool started = false;
@@ -93,11 +104,14 @@ public:
     std::string subscribedTopics[MAX_SUBSCRIPTIONS];
     int subscriptionCount = 0;
 
+    int lastSubscribeQos = 0;
+
     std::string unsubscribedTopics[MAX_SUBSCRIPTIONS];
     int unsubscribeCount = 0;
 
     std::string lastPublishTopic;
-    std::string lastPublishPayload;
+    std::string lastPublishPayload;  // binary-safe: sized by lastPublishLength
+    size_t lastPublishLength = 0;
     int publishCount = 0;
     int lastPublishQos = 0;
     bool lastPublishRetain = false;
@@ -137,6 +151,39 @@ public:
         }
     }
 
+    // Binary variant: explicit length, payload may contain embedded NULs.
+    void simulateBinaryMessage(const char* topic, const uint8_t* data, size_t len) {
+        if (eventHandler) {
+            esp_mqtt_event_t event = {};
+            event.topic = topic;
+            event.topic_len = strlen(topic);
+            event.data = (const char*)data;
+            event.data_len = (int)len;
+            event.total_data_len = (int)len;
+            event.current_data_offset = 0;
+            eventHandler(eventHandlerArg, "MQTT_EVENTS",
+                        MQTT_EVENT_DATA, &event);
+        }
+    }
+
+    // One chunk of a fragmented message, as esp-mqtt delivers them.
+    void simulateBinaryChunk(const char* topic, const uint8_t* data, size_t len,
+                             size_t totalLen, size_t offset) {
+        if (eventHandler) {
+            esp_mqtt_event_t event = {};
+            if (offset == 0) {
+                event.topic = topic;
+                event.topic_len = strlen(topic);
+            }
+            event.data = (const char*)data;
+            event.data_len = (int)len;
+            event.total_data_len = (int)totalLen;
+            event.current_data_offset = (int)offset;
+            eventHandler(eventHandlerArg, "MQTT_EVENTS",
+                        MQTT_EVENT_DATA, &event);
+        }
+    }
+
     void simulateError() {
         if (eventHandler) {
             esp_mqtt_error_codes_mock_t err = {0, 0, 0};
@@ -165,6 +212,8 @@ inline esp_mqtt_client_handle_t esp_mqtt_client_init(
     client->crt_bundle_attach = config->crt_bundle_attach;
     if (config->client_id) client->clientId = config->client_id;
     client->disable_auto_reconnect = config->disable_auto_reconnect;
+    client->out_buffer_size = config->out_buffer_size;
+    client->network_timeout_ms = config->network_timeout_ms;
     return client;
 }
 
@@ -203,7 +252,7 @@ inline int esp_mqtt_client_subscribe(
     esp_mqtt_client_handle_t client,
     const char* topic, int qos)
 {
-    (void)qos;
+    client->lastSubscribeQos = qos;
     if (client->subscriptionCount < MockMqttClient::MAX_SUBSCRIPTIONS) {
         client->subscribedTopics[client->subscriptionCount++] = topic;
     }
@@ -216,12 +265,18 @@ inline int esp_mqtt_client_publish(
     int qos, int retain)
 {
     if (!client->connected) return -1;
+    while (client->blockPublish.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     client->lastPublishTopic = topic;
     if (len == 0 && data) {
-        client->lastPublishPayload = data;
+        client->lastPublishPayload = data;  // IDF strlen branch
     } else if (data) {
         client->lastPublishPayload = std::string(data, len);
+    } else {
+        client->lastPublishPayload.clear();
     }
+    client->lastPublishLength = client->lastPublishPayload.size();
     client->lastPublishQos = qos;
     client->lastPublishRetain = (retain != 0);
     client->publishCount++;

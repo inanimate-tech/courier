@@ -1,4 +1,5 @@
 #include "MqttTransport.h"
+#include <climits>
 #include <cstring>
 #include <cstdlib>
 
@@ -36,8 +37,15 @@ MqttTransport::MqttTransport(const Config& config)
     : _certPem(config.cert_pem),
       _useCertBundle(config.use_cert_bundle),
       _taskStack(config.task_stack),
-      _topics(config.topics.begin(), config.topics.end())
+      _outBufferSize(config.out_buffer_size),
+      _networkTimeoutMs(config.network_timeout_ms)
 {
+    for (const auto& t : config.topics) {
+        _topics.push_back(Subscription{t, 0, false});
+    }
+    for (const auto& t : config.binaryTopics) {
+        _topics.push_back(Subscription{t, 0, true});
+    }
     if (config.clientId) {
         _configClientId = config.clientId;
     }
@@ -73,6 +81,12 @@ void MqttTransport::freeReassemblyBuf()
 
 void MqttTransport::destroyClient()
 {
+    LockGuard<TimedMutex> guard(_clientLock);
+    destroyClientLocked();
+}
+
+void MqttTransport::destroyClientLocked()
+{
     if (_client) {
         esp_mqtt_client_stop(_client);
         esp_mqtt_client_destroy(_client);
@@ -83,45 +97,157 @@ void MqttTransport::destroyClient()
     _selfHealActive = false;
 }
 
+// Runs on the ESP-IDF event task, which already holds the IDF API lock. It
+// must not take _clientLock: an app task blocked inside esp_mqtt_client_publish
+// holds _clientLock while waiting for that same IDF lock. Snapshot the list
+// under _topicsLock, then subscribe with no Courier lock held.
 void MqttTransport::subscribeAll()
 {
     if (!_client) return;
-    for (const auto& topic : _topics) {
-        esp_mqtt_client_subscribe(_client, topic.c_str(), 0);
+    std::vector<Subscription> snapshot;
+    {
+        LockGuard<Mutex> guard(_topicsLock);
+        snapshot = _topics;
+    }
+    for (const auto& sub : snapshot) {
+        esp_mqtt_client_subscribe(_client, sub.filter.c_str(), sub.qos);
     }
 }
 
-void MqttTransport::subscribe(const char* topic, int qos)
+void MqttTransport::addSubscription(const char* topic, int qos, bool binary)
 {
-    // Add to list if not already present.
-    for (const auto& t : _topics) {
-        if (t == topic) return;  // Already tracked — idempotent, nothing to do.
+    if (!topic) return;
+    bool isNew = true;
+    {
+        LockGuard<Mutex> guard(_topicsLock);
+        // Already tracked — idempotent on the wire, but the lane can be restated.
+        for (auto& sub : _topics) {
+            if (sub.filter == topic) {
+                sub.binary = binary;
+                isNew = false;
+                break;
+            }
+        }
+        if (isNew) _topics.push_back(Subscription{topic, qos, binary});
     }
-    _topics.push_back(topic);
+    if (!isNew) return;
+
+    // Outside _topicsLock: this calls into ESP-IDF.
+    LockGuard<TimedMutex> guard(_clientLock);
     if (_client && _connected.load(std::memory_order_acquire)) {
         esp_mqtt_client_subscribe(_client, topic, qos);
     }
 }
 
+void MqttTransport::subscribe(const char* topic, int qos)
+{
+    addSubscription(topic, qos, false);
+}
+
+void MqttTransport::subscribeBinary(const char* topic, int qos)
+{
+    addSubscription(topic, qos, true);
+}
+
 void MqttTransport::unsubscribe(const char* topic)
 {
-    for (auto it = _topics.begin(); it != _topics.end(); ++it) {
-        if (*it == topic) {
-            _topics.erase(it);
-            break;
+    if (!topic) return;
+    {
+        LockGuard<Mutex> guard(_topicsLock);
+        for (auto it = _topics.begin(); it != _topics.end(); ++it) {
+            if (it->filter == topic) {
+                _topics.erase(it);
+                break;
+            }
         }
     }
+    LockGuard<TimedMutex> guard(_clientLock);
     if (_client && _connected.load(std::memory_order_acquire)) {
         esp_mqtt_client_unsubscribe(_client, topic);
     }
+}
+
+// MQTT 3.1.1 section 4.7: '+' matches exactly one level, '#' matches the
+// remainder including the parent level ("a/#" matches "a").
+bool MqttTransport::topicMatches(const char* filter, const char* topic)
+{
+    if (!filter || !topic) return false;
+
+    const char* f = filter;
+    const char* t = topic;
+
+    while (*f) {
+        // '#' is only valid as the final level; it matches the remainder.
+        if (*f == '#') return true;
+        // ...and "a/#" matches the parent "a" as well (4.7.1.2).
+        if (*f == '/' && f[1] == '#' && *t == '\0') return true;
+
+        if (*f == '+') {
+            ++f;
+            while (*t && *t != '/') ++t;   // consume exactly one level
+        } else if (*f == *t) {
+            ++f;
+            ++t;
+            continue;
+        } else {
+            return false;
+        }
+        // After a '+', both sides must sit on the same boundary.
+        if (*f != *t) return false;        // both '/' or both end-of-string
+        if (*f == '/') { ++f; ++t; }
+    }
+    return *t == '\0';
+}
+
+// Called from loop() on the app task, which is also the only task that mutates
+// _topics — so the lock is uncontended here. It is taken anyway so the rule
+// stays simple: _topics is never touched without _topicsLock.
+bool MqttTransport::isBinaryTopic(const char* topic) const
+{
+    LockGuard<Mutex> guard(_topicsLock);
+    for (const auto& sub : _topics) {
+        if (sub.binary && topicMatches(sub.filter.c_str(), topic)) return true;
+    }
+    return false;
 }
 
 bool MqttTransport::publish(const char* topic, const char* payload,
                                     int qos, bool retain)
 {
     if (!_client || !_connected.load(std::memory_order_acquire)) return false;
-    int result = esp_mqtt_client_publish(_client, topic, payload, 0,
-                                         qos, retain ? 1 : 0);
+
+    // Not serialisation — esp-mqtt already takes its own API lock on every
+    // entry point. This guards the handle itself: esp_mqtt_client_destroy
+    // takes no lock and frees the client, so a teardown racing this call is a
+    // use-after-free. Bounded, because teardown can be slow (stop() waits for
+    // the IDF task to leave a connect that is bounded by network_timeout_ms).
+    if (!_clientLock.tryLockFor(PUBLISH_LOCK_TIMEOUT_MS)) return false;
+    int result = _client
+        ? esp_mqtt_client_publish(_client, topic, payload, 0, qos, retain ? 1 : 0)
+        : -1;
+    _clientLock.unlock();
+    return result >= 0;
+}
+
+bool MqttTransport::publishBinary(const char* topic, const uint8_t* data,
+                                  size_t len, int qos, bool retain)
+{
+    if (!topic || !_client || !_connected.load(std::memory_order_acquire)) return false;
+
+    // esp_mqtt_client_publish does `if (len <= 0 && data != NULL) len =
+    // strlen(data)`. `data` here carries no NUL terminator, so letting that
+    // branch fire would read past the end of the buffer — a heap overread that
+    // publishes adjacent memory at best. Reject rather than massage arguments.
+    if (!data) return false;
+    if (len == 0) return false;
+    if (len > (size_t)INT_MAX) return false;
+
+    if (!_clientLock.tryLockFor(PUBLISH_LOCK_TIMEOUT_MS)) return false;
+    int result = _client
+        ? esp_mqtt_client_publish(_client, topic, (const char*)data,
+                                  (int)len, qos, retain ? 1 : 0)
+        : -1;
+    _clientLock.unlock();
     return result >= 0;
 }
 
@@ -145,8 +271,10 @@ bool MqttTransport::send(JsonDocument& doc, const SendOptions& options)
 
 void MqttTransport::begin()
 {
+    LockGuard<TimedMutex> guard(_clientLock);
+
     // Tear down previous client cleanly
-    destroyClient();
+    destroyClientLocked();
 
     // Build wss:// URI
     std::string uri = "wss://";
@@ -158,9 +286,10 @@ void MqttTransport::begin()
     ESP_LOGI(TAG, "Connecting to %s", uri.c_str());
 
     esp_mqtt_client_config_t config = {};
-    // Buffer stays at default 1024. Large messages are fragmented by the
-    // library and reassembled in PSRAM by our event handler, keeping
-    // internal SRAM free for OTA TLS handshakes.
+    // Receive buffer stays at the IDF default (1024). Large messages are
+    // fragmented by the library and reassembled in PSRAM by our event handler,
+    // keeping internal SRAM free for OTA TLS handshakes. The outbound buffer
+    // is separately tunable via Config::out_buffer_size.
 #if defined(MQTT_CONFIG_V5) && MQTT_CONFIG_V5
     config.broker.address.uri = uri.c_str();
     if (_certPem) {
@@ -170,6 +299,8 @@ void MqttTransport::begin()
     }
     config.credentials.client_id = _configClientId.empty() ? nullptr : _configClientId.c_str();
     config.task.stack_size = _taskStack;
+    if (_outBufferSize > 0)     config.buffer.out_size = _outBufferSize;
+    if (_networkTimeoutMs > 0)  config.network.timeout_ms = _networkTimeoutMs;
 #else
     config.uri = uri.c_str();
     if (_certPem) {
@@ -179,6 +310,8 @@ void MqttTransport::begin()
     }
     config.client_id = _configClientId.empty() ? nullptr : _configClientId.c_str();
     config.task_stack = _taskStack;
+    if (_outBufferSize > 0)     config.out_buffer_size = _outBufferSize;
+    if (_networkTimeoutMs > 0)  config.network_timeout_ms = _networkTimeoutMs;
     config.user_context = this;
 #endif
 
@@ -202,8 +335,13 @@ bool MqttTransport::isConnected() const
     return _client && _connected.load(std::memory_order_acquire);
 }
 
-void MqttTransport::queueIncomingMqttMessage(const char* topic, const char* payload, size_t len)
+void MqttTransport::queueIncomingMqttMessage(const char* topic, const char* payload,
+                                             size_t len)
 {
+    // Queued uniformly; the text/binary lane is chosen at drain time, on the
+    // task that owns _topics. The extra NUL costs one byte and is ignored by
+    // binary consumers, which read `len`.
+    //
     // Push payload first. If the topic push fails after, that one message
     // gets _onMessage / _clientHook but no _onTopicMessage — bounded loss.
     // Pushing topic first risks a permanent index-shift if payload then
@@ -223,14 +361,18 @@ void MqttTransport::loop()
     char* topic = nullptr;
     while (_pending.pop(pmsg)) {
         bool gotTopic = _topicQueue.pop(topic);
-        if (!pmsg.isBinary) {
+        if (gotTopic && isBinaryTopic(topic)) {
+            // Binary never enters the JSON lane: _clientHook is not called.
+            if (_onTopicBinary) {
+                _onTopicBinary(topic, (const uint8_t*)pmsg.payload, pmsg.length);
+            }
+            if (_onBinaryMessage) _onBinaryMessage((const uint8_t*)pmsg.payload, pmsg.length);
+        } else {
             if (_onTopicMessage && gotTopic) {
                 _onTopicMessage(topic, (const char*)pmsg.payload, pmsg.length);
             }
             if (_onMessage) _onMessage((const char*)pmsg.payload, pmsg.length);
             if (_clientHook) _clientHook((const char*)pmsg.payload, pmsg.length);
-        } else {
-            if (_onBinaryMessage) _onBinaryMessage((const uint8_t*)pmsg.payload, pmsg.length);
         }
         if (gotTopic) free(topic);
         free(pmsg.payload);
@@ -250,6 +392,7 @@ void MqttTransport::loop()
 
 void MqttTransport::suspend()
 {
+    LockGuard<TimedMutex> guard(_clientLock);
     if (_client) {
         ESP_LOGI(TAG, "Suspending (freeing task stack)");
         esp_mqtt_client_stop(_client);
@@ -259,6 +402,7 @@ void MqttTransport::suspend()
 
 void MqttTransport::resume()
 {
+    LockGuard<TimedMutex> guard(_clientLock);
     if (_client) {
         ESP_LOGI(TAG, "Resuming");
         esp_mqtt_client_start(_client);
@@ -347,7 +491,8 @@ void MqttTransport::mqttEventHandler(void* handler_arg,
             if (self->_reassemblyPos == self->_reassemblyLen) {
                 self->_reassemblyBuf[self->_reassemblyLen] = '\0';
                 const char* topic = self->_reassemblyTopic ? self->_reassemblyTopic : "";
-                self->queueIncomingMqttMessage(topic, self->_reassemblyBuf, self->_reassemblyLen);
+                self->queueIncomingMqttMessage(topic, self->_reassemblyBuf,
+                                               self->_reassemblyLen);
                 self->freeReassemblyBuf();
             }
         } else {

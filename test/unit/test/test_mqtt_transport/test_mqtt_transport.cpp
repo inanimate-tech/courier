@@ -1,8 +1,11 @@
 #include <unity.h>
 #include <MqttTransport.h>
 #include <mqtt_client.h>
+#include <atomic>
+#include <chrono>
 #include <cstring>
 #include <string>
+#include <thread>
 
 using namespace Courier;
 
@@ -576,6 +579,381 @@ void test_onMessage_receives_topic_and_payload() {
     TEST_ASSERT_EQUAL_STRING("{\"v\":42}", lastPayloadBuf);
 }
 
+
+// ---------------------------------------------------------------------------
+// Binary lane: length-carrying publish + topic-scoped binary receive.
+// MQTT 3.1.1 has no content-type on the wire, so the subscriber declares
+// which topics carry opaque bytes.
+// ---------------------------------------------------------------------------
+
+static int binaryCount = 0;
+static char lastBinaryTopic[128] = "";
+static uint8_t lastBinaryData[64];
+static size_t lastBinaryLength = 0;
+
+static int textCount = 0;
+static int clientHookCount = 0;
+
+static void resetBinaryCounters() {
+    binaryCount = 0;
+    lastBinaryTopic[0] = '\0';
+    lastBinaryLength = 0;
+    memset(lastBinaryData, 0, sizeof(lastBinaryData));
+    textCount = 0;
+    clientHookCount = 0;
+}
+
+static MqttTransport* createBinaryTransport() {
+    auto* t = new MqttTransport();
+    t->onBinary([](const char* topic, const uint8_t* data, size_t len) {
+        binaryCount++;
+        strncpy(lastBinaryTopic, topic, sizeof(lastBinaryTopic) - 1);
+        lastBinaryTopic[sizeof(lastBinaryTopic) - 1] = '\0';
+        lastBinaryLength = len;
+        size_t copyLen = len < sizeof(lastBinaryData) ? len : sizeof(lastBinaryData);
+        memcpy(lastBinaryData, data, copyLen);
+    });
+    t->onMessage([](const char* topic, const char* payload, size_t len) {
+        (void)topic; (void)payload; (void)len;
+        textCount++;
+    });
+    t->setClientHook([](const char* payload, size_t len) {
+        (void)payload; (void)len;
+        clientHookCount++;
+    });
+    return t;
+}
+
+// --- publishBinary ---------------------------------------------------------
+
+void test_publish_binary_preserves_embedded_nuls() {
+    resetBinaryCounters();
+    mqtt = new MqttTransport();
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+
+    const uint8_t frame[] = {0x00, 0x01, 0x00, 0xFF};
+    TEST_ASSERT_TRUE(mqtt->publishBinary("devices/d1/voice/audio", frame, sizeof(frame)));
+
+    TEST_ASSERT_EQUAL_STRING("devices/d1/voice/audio", client->lastPublishTopic.c_str());
+    TEST_ASSERT_EQUAL(4, client->lastPublishLength);
+    TEST_ASSERT_EQUAL(4, client->lastPublishPayload.size());
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(frame, client->lastPublishPayload.data(), 4);
+}
+
+void test_publish_binary_rejects_zero_length() {
+    mqtt = new MqttTransport();
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+    client->publishCount = 0;
+
+    const uint8_t frame[] = {0x01};
+    // Zero length would hit IDF's `len <= 0 -> strlen(data)` branch and read
+    // past the end of a buffer that is not NUL-terminated.
+    TEST_ASSERT_FALSE(mqtt->publishBinary("t", frame, 0));
+    TEST_ASSERT_EQUAL(0, client->publishCount);
+}
+
+void test_publish_binary_rejects_null_data() {
+    mqtt = new MqttTransport();
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+    client->publishCount = 0;
+
+    TEST_ASSERT_FALSE(mqtt->publishBinary("t", nullptr, 4));
+    TEST_ASSERT_FALSE(mqtt->publishBinary(nullptr, (const uint8_t*)"ab", 2));
+    TEST_ASSERT_EQUAL(0, client->publishCount);
+}
+
+void test_publish_binary_fails_when_disconnected() {
+    mqtt = new MqttTransport();
+    mqtt->begin("host", 443, "/mqtt");
+    const uint8_t frame[] = {0x01, 0x02};
+    TEST_ASSERT_FALSE(mqtt->publishBinary("t", frame, sizeof(frame)));
+}
+
+void test_publish_binary_qos_and_retain() {
+    mqtt = new MqttTransport();
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+
+    const uint8_t frame[] = {0xAA, 0x00, 0xBB};
+    TEST_ASSERT_TRUE(mqtt->publishBinary("t", frame, sizeof(frame), 1, true));
+    TEST_ASSERT_EQUAL(1, client->lastPublishQos);
+    TEST_ASSERT_TRUE(client->lastPublishRetain);
+    TEST_ASSERT_EQUAL(3, client->lastPublishLength);
+}
+
+// --- topicMatches ----------------------------------------------------------
+
+void test_topic_matches_exact_and_wildcards() {
+    TEST_ASSERT_TRUE(MqttTransport::topicMatches("a/b/c", "a/b/c"));
+    TEST_ASSERT_FALSE(MqttTransport::topicMatches("a/b/c", "a/b/d"));
+    TEST_ASSERT_FALSE(MqttTransport::topicMatches("a/b", "a/b/c"));
+    TEST_ASSERT_FALSE(MqttTransport::topicMatches("a/b/c", "a/b"));
+
+    TEST_ASSERT_TRUE(MqttTransport::topicMatches("devices/+/voice/audio",
+                                                 "devices/abc/voice/audio"));
+    TEST_ASSERT_FALSE(MqttTransport::topicMatches("devices/+/voice/audio",
+                                                  "devices/abc/def/voice/audio"));
+    TEST_ASSERT_TRUE(MqttTransport::topicMatches("devices/+", "devices/abc"));
+    TEST_ASSERT_FALSE(MqttTransport::topicMatches("devices/+", "devices/abc/x"));
+
+    TEST_ASSERT_TRUE(MqttTransport::topicMatches("devices/#", "devices/abc/voice/audio"));
+    TEST_ASSERT_TRUE(MqttTransport::topicMatches("devices/#", "devices/abc"));
+    TEST_ASSERT_TRUE(MqttTransport::topicMatches("#", "anything/at/all"));
+    TEST_ASSERT_FALSE(MqttTransport::topicMatches("devices/#", "rooms/abc"));
+
+    // A trailing "#" also matches the parent level itself (MQTT 3.1.1 4.7.1.2).
+    TEST_ASSERT_TRUE(MqttTransport::topicMatches("devices/#", "devices"));
+}
+
+// --- binary receive --------------------------------------------------------
+
+void test_binary_topic_delivered_to_onBinary() {
+    resetBinaryCounters();
+    mqtt = createBinaryTransport();
+    mqtt->subscribeBinary("devices/d1/voice/audio");
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+
+    const uint8_t frame[] = {0x00, 0x01, 0x00, 0xFF};
+    client->simulateBinaryMessage("devices/d1/voice/audio", frame, sizeof(frame));
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, binaryCount);
+    TEST_ASSERT_EQUAL_STRING("devices/d1/voice/audio", lastBinaryTopic);
+    TEST_ASSERT_EQUAL(4, lastBinaryLength);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(frame, lastBinaryData, 4);
+}
+
+void test_binary_topic_bypasses_text_and_client_hook() {
+    resetBinaryCounters();
+    mqtt = createBinaryTransport();
+    mqtt->subscribeBinary("devices/d1/voice/audio");
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+
+    const uint8_t frame[] = {0x00, 0x01};
+    client->simulateBinaryMessage("devices/d1/voice/audio", frame, sizeof(frame));
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, binaryCount);
+    TEST_ASSERT_EQUAL(0, textCount);
+    TEST_ASSERT_EQUAL(0, clientHookCount);
+}
+
+void test_binary_wildcard_filter_matches_concrete_topic() {
+    resetBinaryCounters();
+    mqtt = createBinaryTransport();
+    mqtt->subscribeBinary("devices/+/voice/audio");
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+
+    const uint8_t frame[] = {0x00, 0x7F, 0x00};
+    client->simulateBinaryMessage("devices/xyz/voice/audio", frame, sizeof(frame));
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, binaryCount);
+    TEST_ASSERT_EQUAL_STRING("devices/xyz/voice/audio", lastBinaryTopic);
+    TEST_ASSERT_EQUAL(3, lastBinaryLength);
+    TEST_ASSERT_EQUAL(0, clientHookCount);
+}
+
+void test_text_topic_unaffected_by_binary_subscription() {
+    resetBinaryCounters();
+    mqtt = createBinaryTransport();
+    mqtt->subscribeBinary("devices/d1/voice/audio");
+    mqtt->subscribe("devices/d1/command");
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+
+    client->simulateMessage("devices/d1/command", "{\"type\":\"ping\"}");
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(0, binaryCount);
+    TEST_ASSERT_EQUAL(1, textCount);
+    TEST_ASSERT_EQUAL(1, clientHookCount);
+}
+
+void test_config_binary_topics_subscribed_and_routed() {
+    resetBinaryCounters();
+    MqttTransport::Config cfg;
+    cfg.topics = {"devices/d1/command"};
+    cfg.binaryTopics = {"devices/d1/voice/audio"};
+    mqtt = new MqttTransport(cfg);
+    mqtt->onBinary([](const char* topic, const uint8_t* data, size_t len) {
+        (void)topic; (void)data;
+        binaryCount++;
+        lastBinaryLength = len;
+    });
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+
+    TEST_ASSERT_EQUAL(2, client->subscriptionCount);
+
+    const uint8_t frame[] = {0x00, 0x00};
+    client->simulateBinaryMessage("devices/d1/voice/audio", frame, sizeof(frame));
+    mqtt->loop();
+    TEST_ASSERT_EQUAL(1, binaryCount);
+    TEST_ASSERT_EQUAL(2, lastBinaryLength);
+}
+
+void test_binary_subscription_survives_reconnect() {
+    resetBinaryCounters();
+    mqtt = createBinaryTransport();
+    mqtt->subscribeBinary("devices/d1/voice/audio", 1);
+    mqtt->begin("host", 443, "/mqtt");
+    MockMqttClient::lastInstance()->simulateConnect();
+    MockMqttClient::lastInstance()->simulateDisconnect();
+
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+
+    TEST_ASSERT_EQUAL(1, client->subscriptionCount);
+    TEST_ASSERT_EQUAL_STRING("devices/d1/voice/audio",
+                             client->subscribedTopics[0].c_str());
+    TEST_ASSERT_EQUAL(1, client->lastSubscribeQos);
+
+    const uint8_t frame[] = {0x00, 0x01};
+    client->simulateBinaryMessage("devices/d1/voice/audio", frame, sizeof(frame));
+    mqtt->loop();
+    TEST_ASSERT_EQUAL(1, binaryCount);
+}
+
+void test_binary_multichunk_reassembly() {
+    resetBinaryCounters();
+    mqtt = createBinaryTransport();
+    mqtt->subscribeBinary("devices/d1/voice/audio");
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+
+    const uint8_t first[]  = {0x00, 0x01};
+    const uint8_t second[] = {0x00, 0xFF};
+    client->simulateBinaryChunk("devices/d1/voice/audio", first, 2, 4, 0);
+    client->simulateBinaryChunk("devices/d1/voice/audio", second, 2, 4, 2);
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, binaryCount);
+    TEST_ASSERT_EQUAL(4, lastBinaryLength);
+    const uint8_t expected[] = {0x00, 0x01, 0x00, 0xFF};
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, lastBinaryData, 4);
+    TEST_ASSERT_EQUAL(0, clientHookCount);
+}
+
+
+// ---------------------------------------------------------------------------
+// Client lock: a publish reports "busy" rather than blocking indefinitely
+// behind another task inside the ESP-IDF client. Bounds contention only.
+// ---------------------------------------------------------------------------
+
+void test_publish_reports_busy_while_another_task_holds_the_client() {
+    mqtt = new MqttTransport();
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+
+    client->blockPublish.store(true);
+    std::atomic<bool> inFlight{false};
+    std::thread holder([&]() {
+        inFlight.store(true);
+        mqtt->publish("t", "held");
+    });
+    while (!inFlight.load()) std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    auto start = std::chrono::steady_clock::now();
+    bool ok = mqtt->publish("t", "second");
+    auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+
+    client->blockPublish.store(false);
+    holder.join();
+
+    TEST_ASSERT_FALSE(ok);   // refused, not blocked
+    TEST_ASSERT_TRUE(waited >= (long)MqttTransport::PUBLISH_LOCK_TIMEOUT_MS);
+    TEST_ASSERT_TRUE(waited < (long)MqttTransport::PUBLISH_LOCK_TIMEOUT_MS * 4);
+}
+
+void test_publish_binary_reports_busy_while_client_held() {
+    mqtt = new MqttTransport();
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+
+    client->blockPublish.store(true);
+    std::atomic<bool> inFlight{false};
+    std::thread holder([&]() {
+        inFlight.store(true);
+        mqtt->publish("t", "held");
+    });
+    while (!inFlight.load()) std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    const uint8_t frame[] = {0x00, 0x01};
+    bool ok = mqtt->publishBinary("t", frame, sizeof(frame));
+
+    client->blockPublish.store(false);
+    holder.join();
+
+    TEST_ASSERT_FALSE(ok);
+}
+
+void test_publish_succeeds_once_the_client_is_free_again() {
+    mqtt = new MqttTransport();
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    client->simulateConnect();
+
+    client->blockPublish.store(true);
+    std::atomic<bool> inFlight{false};
+    std::thread holder([&]() {
+        inFlight.store(true);
+        mqtt->publish("t", "held");
+    });
+    while (!inFlight.load()) std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    client->blockPublish.store(false);
+    holder.join();
+
+    TEST_ASSERT_TRUE(mqtt->publish("t", "after"));
+    TEST_ASSERT_EQUAL_STRING("after", client->lastPublishPayload.c_str());
+}
+
+// ---------------------------------------------------------------------------
+// Buffer and timeout knobs — both default to "leave the IDF default alone".
+// ---------------------------------------------------------------------------
+
+void test_buffer_and_timeout_defaults_are_not_set() {
+    mqtt = new MqttTransport();
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    TEST_ASSERT_EQUAL(0, client->out_buffer_size);
+    TEST_ASSERT_EQUAL(0, client->network_timeout_ms);
+}
+
+void test_config_out_buffer_and_network_timeout_passed_through() {
+    MqttTransport::Config cfg;
+    cfg.out_buffer_size = 2048;
+    cfg.network_timeout_ms = 3000;
+    mqtt = new MqttTransport(cfg);
+    mqtt->begin("host", 443, "/mqtt");
+    auto* client = MockMqttClient::lastInstance();
+    TEST_ASSERT_EQUAL(2048, client->out_buffer_size);
+    TEST_ASSERT_EQUAL(3000, client->network_timeout_ms);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_name_is_mqtt);
@@ -618,5 +996,23 @@ int main(int argc, char **argv) {
     RUN_TEST(test_mqtt_on_configure_can_override_config_cert);
     RUN_TEST(test_mqtt_on_configure_not_set_works);
     RUN_TEST(test_onMessage_receives_topic_and_payload);
+    RUN_TEST(test_publish_binary_preserves_embedded_nuls);
+    RUN_TEST(test_publish_binary_rejects_zero_length);
+    RUN_TEST(test_publish_binary_rejects_null_data);
+    RUN_TEST(test_publish_binary_fails_when_disconnected);
+    RUN_TEST(test_publish_binary_qos_and_retain);
+    RUN_TEST(test_topic_matches_exact_and_wildcards);
+    RUN_TEST(test_binary_topic_delivered_to_onBinary);
+    RUN_TEST(test_binary_topic_bypasses_text_and_client_hook);
+    RUN_TEST(test_binary_wildcard_filter_matches_concrete_topic);
+    RUN_TEST(test_text_topic_unaffected_by_binary_subscription);
+    RUN_TEST(test_config_binary_topics_subscribed_and_routed);
+    RUN_TEST(test_binary_subscription_survives_reconnect);
+    RUN_TEST(test_binary_multichunk_reassembly);
+    RUN_TEST(test_publish_reports_busy_while_another_task_holds_the_client);
+    RUN_TEST(test_publish_binary_reports_busy_while_client_held);
+    RUN_TEST(test_publish_succeeds_once_the_client_is_free_again);
+    RUN_TEST(test_buffer_and_timeout_defaults_are_not_set);
+    RUN_TEST(test_config_out_buffer_and_network_timeout_passed_through);
     return UNITY_END();
 }

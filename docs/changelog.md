@@ -1,16 +1,34 @@
 # Changelog
 
-## v0.6.0
-
-Theme: receive parallels send — `Client::onMessage` is the default-transport receive path, mirroring `Client::send`.
-
-### Breaking changes
-
-- **`Client::onMessage` now delivers only the default transport's messages.** Just as `Client::send(doc)` routes to `Config::defaultTransport` only, the client-level `onMessage` callback now fires only for JSON dispatched from that same transport. Other transports' messages no longer reach it — use their per-transport receive hooks instead: `WebSocketTransport::onText`/`onBinary`, `MqttTransport::onMessage(topic, payload, len)`, and the new `UdpTransport::onText`. Setting `Config::defaultTransport = nullptr` (or an empty transport name) now closes the default lane in both directions — `send()` already returned `false` with no default transport, and `onMessage` now delivers nothing either. This replaces any need for a per-transport "deliver upward to the client" flag: routing is symmetric, decided once by `defaultTransport`, and re-evaluated every dispatch so a runtime `setDefaultTransport()` switch takes effect immediately.
+## v0.7.0-dev
 
 ### New
 
-- **`UdpTransport::onText(TextCallback cb)`** — raw per-packet receive hook `(const char* payload, size_t length)`, matching `WebSocketTransport::onText`. Since UDP is usually a non-default transport, this is its receive path now that `Client::onMessage` no longer sees it.
+- `MqttTransport::publishBinary(topic, data, len, qos, retain)` — publishes with an explicit length. The `const char*` overloads pass length 0, which IDF reads as `strlen(data)`, so payloads containing NULs were truncated and buffers with no terminator were read past the end. Rejects `nullptr`, `len == 0` and `len > INT_MAX`; an intentionally empty payload is `publish(topic, "", qos, retain)`.
+- `MqttTransport::subscribeBinary(topic, qos)`, `onBinary(topic, data, len)` and `Config::binaryTopics` — payloads on a binary-declared filter reach `onBinary` only, never `onMessage` or `Client`'s JSON lane.
+- `MqttTransport::topicMatches(filter, topic)` — public static MQTT 3.1.1 filter matching (`+`, `#`, and `a/#` matching `a`). Routes wildcard binary subscriptions to the concrete topic the broker delivers. The text/binary lane is chosen when `loop()` drains, on the task that owns the subscription list, so the IDF event task does no per-message classification.
+- `MqttTransport::Config::out_buffer_size` and `network_timeout_ms` — `0` (the default) leaves the IDF values untouched.
+
+### Fixed
+
+- Subscriptions are re-subscribed at their registered QoS after a reconnect; `subscribeAll` used QoS 0 for everything.
+- `publish` / `publishBinary` are safe to call from a task other than the one running `loop()`. esp-mqtt already serialises its own API calls, but `esp_mqtt_client_destroy` takes no lock and frees the handle — so a reconnect escalation could free the client mid-publish. Courier now holds a lock across `begin` / `disconnect` / `suspend` / `resume`, which the publish path takes with a 250 ms bound, returning `false` instead of waiting out a teardown. It does not bound a socket write already in progress inside ESP-IDF.
+
+### Known limits
+
+- The MQTT inbound queue is depth 8, drained on the app task at `loop()` cadence. `onBinary` suits control-rate payloads, not sustained streams.
+
+---
+
+## v0.6.0
+
+### Breaking changes
+
+- `Client::onMessage` now fires only for `Config::defaultTransport`, mirroring `Client::send`. Other transports deliver through their own hooks — `WebSocketTransport::onText`/`onBinary`, `MqttTransport::onMessage(topic, payload, len)`, `UdpTransport::onText`. `defaultTransport = nullptr` closes the lane in both directions, and the default is re-read per dispatch so `setDefaultTransport()` takes effect immediately.
+
+### New
+
+- `UdpTransport::onText(cb)` — per-packet receive hook `(payload, length)`, matching `WebSocketTransport::onText`.
 
 ---
 
@@ -18,54 +36,50 @@ Theme: receive parallels send — `Client::onMessage` is the default-transport r
 
 ### New
 
-- **IDF certificate bundle by default on `WebSocketTransport` and `MqttTransport`.** Both transport `Config`s gain `use_cert_bundle` (default `true`), wiring `esp_crt_bundle_attach` into the IDF client — the same default `HttpTransport` already had, and the bundle is already linked (0.5.0). TLS precedence per transport: `cert_pem` (pin) > cert bundle > WS-only embedded GTS Root R4 (`use_default_certs`, now the fallback for builds without `MBEDTLS_CERTIFICATE_BUNDLE`) > nothing. Consumers that pinned a root only to get TLS working (e.g. a Cloudflare-fronted host) can drop the pin and stop tracking CA rotations.
-- `WebSocketTransport::useDefaultCerts()` now expresses explicit intent: it disables the bundle and selects the embedded GTS Root R4 (previously it only set an already-default flag).
-- **Old WS clients degrade gracefully.** The bundled `esp_websocket_client` inside IDF 4.x Arduino cores predates the `crt_bundle_attach` config hook; the member is detected at compile time and such builds fall back to the embedded GTS Root R4 (the pre-0.5.1 behavior) instead of failing to compile.
+- `use_cert_bundle` on `WebSocketTransport::Config` and `MqttTransport::Config` (default `true`) wires `esp_crt_bundle_attach`. TLS precedence per transport: `cert_pem` > cert bundle > WS-only embedded GTS Root R4 > nothing.
+- `WebSocketTransport::useDefaultCerts()` now disables the bundle and selects the embedded GTS Root R4; previously it set an already-default flag.
+- WS clients predating the `crt_bundle_attach` config hook (IDF 4.x Arduino cores) fall back to the embedded GTS Root R4 instead of failing to compile.
 
 ### Upgrading notes
 
-- **Behavior change:** with no `cert_pem` set, WS now validates against the certificate bundle instead of the embedded GTS Root R4 (strictly more permissive), and MQTT validates against the bundle instead of failing TLS setup with no verification option. Set `use_cert_bundle = false` to restore the old behavior.
+- With no `cert_pem` set, WS now validates against the bundle instead of GTS Root R4, and MQTT against the bundle instead of failing TLS setup with no verification option. Set `use_cert_bundle = false` to restore the old behavior.
 
 ---
 
 ## v0.5.0
 
-Theme: receive-path memory — larger messages on no-PSRAM boards; `HttpTransport` hardening.
-
 ### New
 
-- **`HttpTransport`** — opt-in HTTPS transport (blocking `fetch()`, buffered or streaming) that also participates as a full transport citizen via `send()`/`onMessage`. Set `defaultTransport = "https"` to skip the built-in `"ws"` and use `HttpTransport` instead. See the README's HTTPS section.
+- `HttpTransport` — opt-in HTTPS transport: blocking `fetch()` (buffered or streaming), plus `send()` / `onMessage`. Set `defaultTransport = "https"` to skip the built-in `"ws"`.
+
+### Breaking changes
+
+- The built-in `"ws"` transport auto-registers only when `Config::host` is set **and** `defaultTransport` is `"ws"` or unset. Register it explicitly with `addTransport<WebSocketTransport>("ws")` if you relied on it alongside another default.
 
 ### Upgrading notes
 
-- **Behavior change: built-in `"ws"` auto-registration is now conditional on `defaultTransport`.** The built-in `"ws"` transport now auto-registers only when `Config::host` is set AND `defaultTransport` is `"ws"` or unset. Previously it registered whenever `host` was set, regardless of `defaultTransport`. If you relied on the implicit WS transport alongside a different default (e.g. `defaultTransport: "mqtt"`), register it explicitly with `addTransport<WebSocketTransport>("ws")`.
-- **Binary size.** `esp_http_client` and the IDF certificate bundle are now always linked in (Courier's time-sync bootstrap depends on them), adding roughly +80-100KB to firmware binary size even for projects that never construct an `HttpTransport`.
-- **`settimeofday` now set by Courier.** `Client::syncTimeFromHttpDate()` calls `setSystemClock()` (`settimeofday`) in addition to ezTime's `UTC.setTime()` — previously only ezTime's virtual clock was set from the HTTP Date header, so the system clock (which mbedTLS/TLS cert validation reads) stayed at its boot default until NTP arrived. `Client::loop()`'s NTP bridge now also re-fires whenever ezTime and the system clock diverge by more than 5s (previously a one-shot latch), so a later genuine NTP correction can repair a poisoned or drifted system clock.
+- `esp_http_client` and the IDF certificate bundle are now always linked (the time-sync bootstrap needs them): +80-100KB of binary even for projects that never construct an `HttpTransport`.
+- `syncTimeFromHttpDate()` now sets the system clock (`settimeofday`) as well as ezTime's, and the NTP bridge re-fires whenever the two diverge by more than 5s instead of latching once.
 
 ### Fixes
 
-- **NTP-first time acquisition with a bounded wait (poem-firmware pattern).** `Client` now tries NTP first via ezTime's `waitForSync()` with an 8s bound (never 0 — that blocks forever), falling back to the HTTP Date probe only on timeout. On networks where NTP works, the unauthenticated Date probe never runs at all. `events()` is now gated on WiFi being connected: ezTime fires its first NTP query from the first `events()` call and only retries every ~20s on failure, so an early pre-WiFi call pushed the initial sync past any bounded wait (and previously delayed first NTP sync by ~20s). `TIME_SYNC` error callbacks now carry the specific failure reason (probe unreachable / no Date header / unparseable / predates build / implausibly far in future).
-
-- **Time-bootstrap redirect trap.** The HTTP Date-header probe (`syncTimeFromHttpDate`) now sets `disable_auto_redirect` so a 301 on the plain-HTTP leg is treated as the response (Date header captured) instead of being silently followed into a cold-clock TLS handshake that fails and discards the Date. Both legs are now capped at a 5s timeout with no retries, bounding the worst-case blocked time during bootstrap.
-- **Build-epoch floor rejected valid current-UTC Date headers on UTC-ahead build machines.** `__DATE__`/`__TIME__` are the build machine's *local* wall clock parsed as if UTC, so `buildEpoch()` can lead true UTC by up to ~14 hours — a firmware built in BST rejected a perfectly correct Date header fetched within the hour ("Date header predates firmware build"). The floor comparison now allows 24 hours of timezone slack (`kBuildEpochTzSlack`), which covers every UTC offset while still blocking the gross clock-rollback the guard exists for.
-- **`ESP_ERR_HTTP_MAX_REDIRECT` misclassified as a transport failure.** On IDF 4.4 (Arduino core 2.x), `esp_http_client_perform()` returns `ESP_ERR_HTTP_MAX_REDIRECT` for *any* non-2xx status when `disable_auto_redirect` is set — after the status and headers were already parsed (IDF 5.x reports the 3xx as a normal response instead). `HttpTransport` treated that error as `ErrConnect`, discarding the already-captured response — which broke the time-sync probe on Cloudflare-fronted hosts (`E HTTP_CLIENT: Error, reach max_redirection_count count=0`) and burned pointless retries against a reachable server. The classification now returns the real HTTP status whenever one was parsed alongside that error, on both IDF generations.
-- **Clock-forward plausibility ceiling.** `syncTimeFromHttpDate` now rejects Date headers more than 10 years past the firmware build date (alongside the existing floor that rejects dates before the build), guarding against a MITM setting the clock implausibly far forward on the unauthenticated bootstrap leg.
-- **Redirects corrupting buffered/streaming `fetch()` responses.** `HttpTransport::eventHandler` now resets accumulated body/headers when a new hop's headers arrive after a previous hop's response had already been latched, and never accumulates or streams a 3xx hop's body. Previously an intermediate redirect with its own body could latch the wrong status and concatenate the redirect body with the final response's body.
-- **`HttpTransport::send()`** no longer dispatches a truncated (`!complete()`) JSON reply to `onMessage` — `send()` still reports `ok()` (e.g. `true` for a 2xx that got cut short), but truncated JSON never reaches the raw hook.
+- NTP-first time acquisition: an 8s bounded `waitForSync()`, falling back to the HTTP Date probe only on timeout. `events()` is gated on WiFi being connected, and `TIME_SYNC` errors carry a reason.
+- The Date probe sets `disable_auto_redirect`, so a 301 on the plain-HTTP leg yields the Date header instead of a cold-clock TLS handshake. Both legs capped at 5s with no retries.
+- The build-epoch floor allows 24h of timezone slack — a firmware built in BST rejected valid current-UTC Date headers.
+- `ESP_ERR_HTTP_MAX_REDIRECT` is no longer misclassified as a transport failure on IDF 4.4; the parsed HTTP status is returned instead.
+- Date headers more than 10 years past the build date are rejected.
+- Redirects no longer corrupt buffered or streaming `fetch()` responses: a new hop's headers reset accumulated state, and 3xx bodies are never accumulated or streamed.
+- `HttpTransport::send()` no longer dispatches truncated JSON to `onMessage`.
+- WebSocket and MQTT reassembly buffers fall back to internal RAM when the PSRAM allocation fails, instead of dropping every fragmented message on no-PSRAM boards.
+- Receive-path failures (allocation, queue overflow, reassembly, JSON parse) now log with the payload size.
 
 ### Improved
 
-- **Zero-copy receive hand-off.** New `Transport::queueIncomingMessageOwned` / `queueIncomingBinaryOwned` transfer ownership of an already-heap-allocated payload into the pending queue instead of malloc+memcpy-ing a second copy. `WebSocketTransport` hands its fragmented-frame reassembly buffer over this way, removing a transient 2× peak that capped receivable message size on boards without PSRAM (e.g. ESP32-S3FN8 / M5Dial). The copying `queueIncomingMessage` / `queueIncomingBinary` remain for payloads the transport doesn't own (single-frame WS, MQTT, UDP).
-- **Zero-copy JSON dispatch.** `Client::dispatchJSON` now parses the payload as mutable `char*`, so ArduinoJson points strings into the existing buffer instead of duplicating them into the document — large string fields (e.g. app code) are no longer held in memory twice during dispatch. Safe by the `drainPending` contract: payloads are heap-owned scratch buffers, the raw per-transport hook runs before the client hook, and the buffer outlives the dispatch callback.
-- **WebSocket reassembly buffer falls back to internal RAM** when the `MALLOC_CAP_SPIRAM` allocation fails (no-PSRAM boards), instead of silently dropping every fragmented frame.
-- **MQTT reassembly buffer falls back to internal RAM** the same way. `MqttTransport`'s multi-chunk reassembly malloc'd from `MALLOC_CAP_SPIRAM` with no fallback, so on no-PSRAM boards (M5Dial) every message larger than the 1 KB library buffer — including pushed app/shader payloads over MQTT — returned NULL and was dropped. Now mirrors the WebSocket path.
-- **Receive-path failures now log.** Allocation failure, queue overflow, reassembly-buffer allocation failure, and JSON parse failure each emit a warning with the payload size — oversized messages no longer vanish without a trace.
-
-In practice this raises the largest receivable JSON message on a no-PSRAM ESP32-S3 from ~5 KB to ~12 KB+ (bounded by largest contiguous free block at parse time). PSRAM boards see strictly less copying.
+- Zero-copy receive hand-off (`queueIncomingMessageOwned` / `queueIncomingBinaryOwned`) and zero-copy JSON dispatch in `Client::dispatchJSON`. Raises the largest receivable JSON message on a no-PSRAM ESP32-S3 from ~5 KB to ~12 KB+.
 
 ### Internal
 
-- `Transport::drainPending` documents the payload-buffer contract (heap-owned, NUL-terminated, `_onMessage` before `_clientHook`, client hook may mutate in place). Overriding drains must preserve this order.
+- `Transport::drainPending` documents the payload-buffer contract (heap-owned, NUL-terminated, `_onMessage` before `_clientHook`). Overriding drains must preserve it.
 
 ---
 
