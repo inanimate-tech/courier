@@ -30,6 +30,16 @@ static void onConnectionCallback(Transport* transport, bool connected) {
     lastConnectionState = connected;
 }
 
+static int errorCount = 0;
+static MqttTransport::ErrorInfo lastError;
+static MqttTransport::ErrorInfo errorSequence[8];
+
+static void onErrorCallback(const MqttTransport::ErrorInfo& err) {
+    if (errorCount < 8) errorSequence[errorCount] = err;
+    errorCount++;
+    lastError = err;
+}
+
 static MqttTransport* mqtt = nullptr;
 
 void setUp(void) {
@@ -39,6 +49,8 @@ void setUp(void) {
     lastDeliveredLength = 0;
     connectionEventCount = 0;
     lastConnectionState = false;
+    errorCount = 0;
+    lastError = MqttTransport::ErrorInfo();
 }
 
 void tearDown(void) {
@@ -1020,6 +1032,127 @@ void test_error_info_describe_handles_unknown_type() {
     TEST_ASSERT_NOT_NULL(err.describe());
 }
 
+// ---------------------------------------------------------------------------
+// onError delivery — capture, queue, drain
+// ---------------------------------------------------------------------------
+
+void test_error_is_queued_not_dispatched_on_the_idf_task() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+        MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
+
+    // The event handler runs on the IDF task; user code must not run there.
+    TEST_ASSERT_EQUAL(0, errorCount);
+
+    mqtt->loop();
+    TEST_ASSERT_EQUAL(1, errorCount);
+}
+
+void test_connack_not_authorized_reaches_the_application() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+        MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, errorCount);
+    TEST_ASSERT_TRUE(lastError.isConnectionRefused());
+    TEST_ASSERT_TRUE(lastError.isNotAuthorized());
+}
+
+void test_connack_bad_username_is_not_reported_as_unauthorized() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+        MQTT_CONNECTION_REFUSE_BAD_USERNAME);
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, errorCount);
+    TEST_ASSERT_TRUE(lastError.isConnectionRefused());
+    TEST_ASSERT_FALSE(lastError.isNotAuthorized());
+}
+
+void test_transport_error_carries_tls_and_socket_detail() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient::lastInstance()->simulateTransportError(
+        -0x2700, 0x7280, 4, 113);
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, errorCount);
+    TEST_ASSERT_FALSE(lastError.isNotAuthorized());
+    TEST_ASSERT_EQUAL(-0x2700, lastError.tlsLastEspErr);
+    TEST_ASSERT_EQUAL(0x7280, lastError.tlsStackErr);
+    TEST_ASSERT_EQUAL(4, lastError.tlsCertVerifyFlags);
+    TEST_ASSERT_EQUAL(113, lastError.sockErrno);
+}
+
+void test_multiple_errors_delivered_in_order_on_one_loop() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient* client = MockMqttClient::lastInstance();
+
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_ID_REJECTED);
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(2, errorCount);
+    TEST_ASSERT_EQUAL(MQTT_CONNECTION_REFUSE_ID_REJECTED,
+                      errorSequence[0].connectReturnCode);
+    TEST_ASSERT_EQUAL(MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED,
+                      errorSequence[1].connectReturnCode);
+}
+
+void test_error_without_registered_callback_is_safe() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    // deliberately no onError()
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+        MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
+    mqtt->loop();
+    TEST_ASSERT_EQUAL(0, errorCount);
+}
+
+void test_error_with_null_handle_does_not_crash() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient::lastInstance()->simulateErrorWithNullHandle();
+    mqtt->loop();
+
+    // Still reported, with benign defaults — an error happened, detail unknown.
+    TEST_ASSERT_EQUAL(1, errorCount);
+    TEST_ASSERT_FALSE(lastError.isNotAuthorized());
+}
+
+void test_error_reporting_does_not_disturb_message_delivery() {
+    mqtt = createWithTopics();       // already wires onMessageCallback
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient* client = MockMqttClient::lastInstance();
+
+    client->simulateConnect();
+    client->simulateMessage("devices/dev123/command", "{\"type\":\"ping\"}");
+    client->simulateError(MQTT_ERROR_TYPE_TCP_TRANSPORT,
+                          MQTT_CONNECTION_ACCEPTED);
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, deliveredMessageCount);
+    TEST_ASSERT_EQUAL(1, errorCount);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_name_is_mqtt);
@@ -1085,5 +1218,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_error_info_stale_connack_does_not_leak_through_tcp_error);
     RUN_TEST(test_error_info_describe_distinguishes_causes);
     RUN_TEST(test_error_info_describe_handles_unknown_type);
+    RUN_TEST(test_error_is_queued_not_dispatched_on_the_idf_task);
+    RUN_TEST(test_connack_not_authorized_reaches_the_application);
+    RUN_TEST(test_connack_bad_username_is_not_reported_as_unauthorized);
+    RUN_TEST(test_transport_error_carries_tls_and_socket_detail);
+    RUN_TEST(test_multiple_errors_delivered_in_order_on_one_loop);
+    RUN_TEST(test_error_without_registered_callback_is_safe);
+    RUN_TEST(test_error_with_null_handle_does_not_crash);
+    RUN_TEST(test_error_reporting_does_not_disturb_message_delivery);
     return UNITY_END();
 }

@@ -417,6 +417,16 @@ void MqttTransport::loop()
     }
 
     drainSignals();
+
+    // Errors drain LAST and with no lock held. Both matter:
+    //  - last, because the callback may disconnect()/begin(), so nothing of
+    //    ours may run after it in this iteration;
+    //  - unlocked, because begin()/disconnect() take _clientLock unbounded and
+    //    would self-deadlock the app task if we held it here (see Lock.h).
+    ErrorInfo err;
+    while (_errorQueue.pop(err)) {
+        if (_onError) _onError(err);
+    }
 }
 
 void MqttTransport::suspend()
@@ -531,9 +541,27 @@ void MqttTransport::mqttEventHandler(void* handler_arg,
         break;
     }
 
-    case MQTT_EVENT_ERROR:
-        ESP_LOGE(TAG, "MQTT error");
+    case MQTT_EVENT_ERROR: {
+        ErrorInfo info;
+        // error_handle is a pointer on both IDF 4.4 and 5.x. Reach the fields
+        // through auto* — the type is named differently by the host mock.
+        if (event->error_handle) {
+            auto* h = event->error_handle;
+            info.type               = (esp_mqtt_error_type_t)h->error_type;
+            info.connectReturnCode  = (esp_mqtt_connect_return_code_t)h->connect_return_code;
+            info.tlsLastEspErr      = h->esp_tls_last_esp_err;
+            info.tlsStackErr        = h->esp_tls_stack_err;
+            info.tlsCertVerifyFlags = h->esp_tls_cert_verify_flags;
+            info.sockErrno          = h->esp_transport_sock_errno;
+        }
+
+        ESP_LOGE(TAG, "MQTT error: %s", info.describe());
+
+        if (!self->_errorQueue.push(info)) {
+            ESP_LOGW(TAG, "error queue full, dropping error report");
+        }
         break;
+    }
 
     default:
         break;

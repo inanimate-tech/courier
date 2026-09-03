@@ -206,11 +206,40 @@ public:
         }
     }
 
-    void simulateError() {
+    void simulateError(esp_mqtt_error_type_t errorType,
+                       esp_mqtt_connect_return_code_t connectReturnCode) {
+        esp_mqtt_error_codes_mock_t err = {};
+        err.error_type = errorType;
+        err.connect_return_code = connectReturnCode;
+        dispatchError(&err);
+    }
+
+    void simulateTransportError(int tlsEspErr, int tlsStackErr,
+                                int certVerifyFlags, int sockErrno) {
+        esp_mqtt_error_codes_mock_t err = {};
+        err.error_type = MQTT_ERROR_TYPE_TCP_TRANSPORT;
+        err.esp_tls_last_esp_err = tlsEspErr;
+        err.esp_tls_stack_err = tlsStackErr;
+        err.esp_tls_cert_verify_flags = certVerifyFlags;
+        err.esp_transport_sock_errno = sockErrno;
+        dispatchError(&err);
+    }
+
+    // IDF always populates error_handle, but the production code null-checks
+    // it; this proves the check is real.
+    void simulateErrorWithNullHandle() {
         if (eventHandler) {
-            esp_mqtt_error_codes_mock_t err = {};
             esp_mqtt_event_t event = {};
-            event.error_handle = &err;
+            event.error_handle = nullptr;
+            eventHandler(eventHandlerArg, "MQTT_EVENTS",
+                        MQTT_EVENT_ERROR, &event);
+        }
+    }
+
+    void dispatchError(esp_mqtt_error_codes_mock_t* err) {
+        if (eventHandler) {
+            esp_mqtt_event_t event = {};
+            event.error_handle = err;
             eventHandler(eventHandlerArg, "MQTT_EVENTS",
                         MQTT_EVENT_ERROR, &event);
         }

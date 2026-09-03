@@ -161,6 +161,21 @@ public:
         const char* describe() const;
     };
 
+    // Per-MQTT error hook. Fires for every MQTT_EVENT_ERROR — a CONNACK
+    // refusal, a TLS failure, a socket error.
+    //
+    // Runs on the app task at loop() cadence, with no transport lock held.
+    // The callback MAY call disconnect() / begin() re-entrantly; the transport
+    // is in a consistent state when it returns. It MUST NOT block — it runs
+    // inside Client::loop(), so a blocking HTTPS re-registration here stalls
+    // the whole state machine. Record intent and act outside the callback;
+    // see docs/api.md.
+    //
+    // Reporting only: Courier keeps retrying regardless. Recovery policy is
+    // the application's.
+    using ErrorCallback = std::function<void(const ErrorInfo&)>;
+    void onError(ErrorCallback cb) { _onError = cb; }
+
     void loop() override;
 
 private:
@@ -227,6 +242,14 @@ private:
     // Stores topic strings (heap-allocated, freed on drain).
     static constexpr size_t TOPIC_QUEUE_DEPTH = 8;
     SpscQueue<char*, TOPIC_QUEUE_DEPTH> _topicQueue;
+
+    // Error reports from the IDF event task. Single-producer (that task only)
+    // / single-consumer (loop()). Synchronous app-task failures are NOT routed
+    // here — they are already visible through return values — which is what
+    // keeps the SPSC contract intact.
+    static constexpr size_t ERROR_QUEUE_DEPTH = 4;
+    SpscQueue<ErrorInfo, ERROR_QUEUE_DEPTH> _errorQueue;
+    ErrorCallback _onError;
 
     void queueIncomingMqttMessage(const char* topic, const char* payload, size_t len);
 
