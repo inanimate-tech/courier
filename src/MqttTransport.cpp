@@ -355,6 +355,35 @@ void MqttTransport::queueIncomingMqttMessage(const char* topic, const char* payl
     }
 }
 
+const char* MqttTransport::ErrorInfo::describe() const
+{
+    switch (type) {
+    case MQTT_ERROR_TYPE_CONNECTION_REFUSED:
+        switch (connectReturnCode) {
+        case MQTT_CONNECTION_REFUSE_PROTOCOL:
+            return "connection refused: unacceptable protocol version";
+        case MQTT_CONNECTION_REFUSE_ID_REJECTED:
+            return "connection refused: identifier rejected";
+        case MQTT_CONNECTION_REFUSE_SERVER_UNAVAILABLE:
+            return "connection refused: server unavailable";
+        case MQTT_CONNECTION_REFUSE_BAD_USERNAME:
+            return "connection refused: bad username or password";
+        case MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED:
+            return "connection refused: not authorized";
+        default:
+            return "connection refused: unknown reason";
+        }
+    case MQTT_ERROR_TYPE_TCP_TRANSPORT:
+        return "transport error (TLS or socket)";
+    case MQTT_ERROR_TYPE_NONE:
+        return "no error";
+    default:
+        // MQTT_ERROR_TYPE_SUBSCRIBE_FAILED on IDF 5; unreachable on IDF 4.4.
+        // Named via default: rather than the constant, which 4.4 lacks.
+        return "other MQTT error";
+    }
+}
+
 void MqttTransport::loop()
 {
     PendingMessage pmsg;

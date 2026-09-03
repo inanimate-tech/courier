@@ -40,10 +40,32 @@ typedef enum {
     MQTT_EVENT_DELETED
 } esp_mqtt_event_id_t;
 
+typedef enum {
+    MQTT_ERROR_TYPE_NONE = 0,
+    MQTT_ERROR_TYPE_TCP_TRANSPORT,
+    MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+    MQTT_ERROR_TYPE_SUBSCRIBE_FAILED
+} esp_mqtt_error_type_t;
+
+typedef enum {
+    MQTT_CONNECTION_ACCEPTED = 0,
+    MQTT_CONNECTION_REFUSE_PROTOCOL,
+    MQTT_CONNECTION_REFUSE_ID_REJECTED,
+    MQTT_CONNECTION_REFUSE_SERVER_UNAVAILABLE,
+    MQTT_CONNECTION_REFUSE_BAD_USERNAME,
+    MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED
+} esp_mqtt_connect_return_code_t;
+
+// Field order and names mirror the real esp_mqtt_error_codes_t on both
+// ESP-IDF 4.4 and 5.x. Production code must not name this type — it reaches
+// the fields through `auto*` off event->error_handle.
 struct esp_mqtt_error_codes_mock_t {
-    int error_type;
-    int connect_return_code;
-    int esp_tls_last_esp_err;
+    esp_err_t esp_tls_last_esp_err;
+    int esp_tls_stack_err;
+    int esp_tls_cert_verify_flags;
+    esp_mqtt_error_type_t error_type;
+    esp_mqtt_connect_return_code_t connect_return_code;
+    int esp_transport_sock_errno;
 };
 
 struct esp_mqtt_event_t {
@@ -186,7 +208,7 @@ public:
 
     void simulateError() {
         if (eventHandler) {
-            esp_mqtt_error_codes_mock_t err = {0, 0, 0};
+            esp_mqtt_error_codes_mock_t err = {};
             esp_mqtt_event_t event = {};
             event.error_handle = &err;
             eventHandler(eventHandlerArg, "MQTT_EVENTS",

@@ -126,6 +126,41 @@ public:
         std::function<void(const char* topic, const uint8_t* data, size_t length)>;
     void onBinary(TopicBinaryCallback cb) { _onTopicBinary = cb; }
 
+    // Structured detail for an MQTT_EVENT_ERROR, as reported by ESP-IDF.
+    // Which fields are meaningful depends on `type`:
+    //   MQTT_ERROR_TYPE_CONNECTION_REFUSED -> connectReturnCode
+    //   MQTT_ERROR_TYPE_TCP_TRANSPORT      -> tls* and sockErrno
+    // Available identically on ESP-IDF 4.4 and 5.x.
+    //
+    // gnu++11: the default member initialisers below stop this being an
+    // aggregate, so never brace-initialise it with member values. Default
+    // construction and value-initialisation (what SpscQueue does) are fine.
+    struct ErrorInfo {
+        esp_mqtt_error_type_t          type = MQTT_ERROR_TYPE_NONE;
+        esp_mqtt_connect_return_code_t connectReturnCode = MQTT_CONNECTION_ACCEPTED;
+        esp_err_t tlsLastEspErr      = 0;
+        int       tlsStackErr        = 0;
+        int       tlsCertVerifyFlags = 0;
+        int       sockErrno          = 0;
+
+        // The broker sent a CONNACK with a non-zero return code.
+        bool isConnectionRefused() const {
+            return type == MQTT_ERROR_TYPE_CONNECTION_REFUSED;
+        }
+
+        // CONNACK return code 5. The broker accepted the packet and rejected
+        // this client's authorization — distinct from bad credentials (4) and
+        // a rejected client ID (2). Retrying unchanged will not help; the
+        // application must change its identity. See docs/api.md.
+        bool isNotAuthorized() const {
+            return type == MQTT_ERROR_TYPE_CONNECTION_REFUSED &&
+                   connectReturnCode == MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED;
+        }
+
+        // Static, human-readable summary for logs. Never null.
+        const char* describe() const;
+    };
+
     void loop() override;
 
 private:

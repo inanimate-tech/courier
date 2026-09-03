@@ -954,6 +954,72 @@ void test_config_out_buffer_and_network_timeout_passed_through() {
     TEST_ASSERT_EQUAL(3000, client->network_timeout_ms);
 }
 
+// ---------------------------------------------------------------------------
+// ErrorInfo value type
+// ---------------------------------------------------------------------------
+
+void test_error_info_defaults_are_benign() {
+    MqttTransport::ErrorInfo err;
+    TEST_ASSERT_FALSE(err.isConnectionRefused());
+    TEST_ASSERT_FALSE(err.isNotAuthorized());
+    TEST_ASSERT_NOT_NULL(err.describe());
+}
+
+void test_error_info_not_authorized_only_for_connack_5() {
+    MqttTransport::ErrorInfo err;
+    err.type = MQTT_ERROR_TYPE_CONNECTION_REFUSED;
+
+    err.connectReturnCode = MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED;
+    TEST_ASSERT_TRUE(err.isConnectionRefused());
+    TEST_ASSERT_TRUE(err.isNotAuthorized());
+
+    err.connectReturnCode = MQTT_CONNECTION_REFUSE_BAD_USERNAME;   // code 4
+    TEST_ASSERT_TRUE(err.isConnectionRefused());
+    TEST_ASSERT_FALSE(err.isNotAuthorized());
+
+    err.connectReturnCode = MQTT_CONNECTION_REFUSE_ID_REJECTED;    // code 2
+    TEST_ASSERT_FALSE(err.isNotAuthorized());
+}
+
+void test_error_info_stale_connack_does_not_leak_through_tcp_error() {
+    // IDF leaves connect_return_code untouched on a transport error. A stale
+    // value from a previous refusal must not read as an authorization failure.
+    MqttTransport::ErrorInfo err;
+    err.type = MQTT_ERROR_TYPE_TCP_TRANSPORT;
+    err.connectReturnCode = MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED;
+    TEST_ASSERT_FALSE(err.isConnectionRefused());
+    TEST_ASSERT_FALSE(err.isNotAuthorized());
+}
+
+void test_error_info_describe_distinguishes_causes() {
+    MqttTransport::ErrorInfo refused;
+    refused.type = MQTT_ERROR_TYPE_CONNECTION_REFUSED;
+    refused.connectReturnCode = MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED;
+
+    MqttTransport::ErrorInfo badUser;
+    badUser.type = MQTT_ERROR_TYPE_CONNECTION_REFUSED;
+    badUser.connectReturnCode = MQTT_CONNECTION_REFUSE_BAD_USERNAME;
+
+    MqttTransport::ErrorInfo tcp;
+    tcp.type = MQTT_ERROR_TYPE_TCP_TRANSPORT;
+
+    TEST_ASSERT_NOT_NULL(refused.describe());
+    TEST_ASSERT_NOT_NULL(badUser.describe());
+    TEST_ASSERT_NOT_NULL(tcp.describe());
+    // The whole point: these three are no longer the same string.
+    TEST_ASSERT_TRUE(strcmp(refused.describe(), tcp.describe())     != 0);
+    TEST_ASSERT_TRUE(strcmp(refused.describe(), badUser.describe()) != 0);
+    TEST_ASSERT_NOT_NULL(strstr(refused.describe(), "not authorized"));
+}
+
+void test_error_info_describe_handles_unknown_type() {
+    // MQTT_ERROR_TYPE_SUBSCRIBE_FAILED exists only on IDF 5; on IDF 4.4 it
+    // falls to the default arm. Either way describe() returns a valid string.
+    MqttTransport::ErrorInfo err;
+    err.type = MQTT_ERROR_TYPE_SUBSCRIBE_FAILED;
+    TEST_ASSERT_NOT_NULL(err.describe());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_name_is_mqtt);
@@ -1014,5 +1080,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_publish_succeeds_once_the_client_is_free_again);
     RUN_TEST(test_buffer_and_timeout_defaults_are_not_set);
     RUN_TEST(test_config_out_buffer_and_network_timeout_passed_through);
+    RUN_TEST(test_error_info_defaults_are_benign);
+    RUN_TEST(test_error_info_not_authorized_only_for_connack_5);
+    RUN_TEST(test_error_info_stale_connack_does_not_leak_through_tcp_error);
+    RUN_TEST(test_error_info_describe_distinguishes_causes);
+    RUN_TEST(test_error_info_describe_handles_unknown_type);
     return UNITY_END();
 }
