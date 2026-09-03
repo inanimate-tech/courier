@@ -196,6 +196,7 @@ ws.onBinary([](const uint8_t* d, size_t l) { });
 mqtt.onMessage([](const char* topic, const char* p, size_t l) { });
 mqtt.subscribeBinary("topic/audio");   // declares the lane: bytes, never JSON
 mqtt.onBinary([](const char* topic, const uint8_t* d, size_t l) { });
+mqtt.onError([](const Courier::MqttTransport::ErrorInfo& e) { });  // CONNACK / TLS detail
 
 // Raw ESP-IDF config access
 ws.onConfigure  ([](esp_websocket_client_config_t& cfg) { });

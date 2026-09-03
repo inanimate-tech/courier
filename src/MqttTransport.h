@@ -126,6 +126,69 @@ public:
         std::function<void(const char* topic, const uint8_t* data, size_t length)>;
     void onBinary(TopicBinaryCallback cb) { _onTopicBinary = cb; }
 
+    // Structured detail for an MQTT_EVENT_ERROR, as reported by ESP-IDF.
+    // Which fields are meaningful depends on `type`:
+    //   MQTT_ERROR_TYPE_CONNECTION_REFUSED -> connectReturnCode
+    //   MQTT_ERROR_TYPE_TCP_TRANSPORT      -> tls* and sockErrno
+    // Available identically on ESP-IDF 4.4 and 5.x.
+    //
+    // gnu++11: the default member initialisers below stop this being an
+    // aggregate, so never brace-initialise it with member values. Default
+    // construction and value-initialisation (what SpscQueue does) are fine.
+    struct ErrorInfo {
+        esp_mqtt_error_type_t          type = MQTT_ERROR_TYPE_NONE;
+        esp_mqtt_connect_return_code_t connectReturnCode = MQTT_CONNECTION_ACCEPTED;
+        esp_err_t tlsLastEspErr      = 0;
+        int       tlsStackErr        = 0;
+        int       tlsCertVerifyFlags = 0;
+        int       sockErrno          = 0;
+
+        // The broker sent a CONNACK with a non-zero return code.
+        bool isConnectionRefused() const {
+            return type == MQTT_ERROR_TYPE_CONNECTION_REFUSED;
+        }
+
+        // CONNACK return code 5. The broker accepted the packet and rejected
+        // this client's authorization — distinct from bad credentials (4) and
+        // a rejected client ID (2). Retrying unchanged will not help; the
+        // application must change its identity. See docs/api.md.
+        bool isNotAuthorized() const {
+            return type == MQTT_ERROR_TYPE_CONNECTION_REFUSED &&
+                   connectReturnCode == MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED;
+        }
+
+        // Static, human-readable summary for logs. Never null.
+        const char* describe() const;
+    };
+
+    // Per-MQTT error hook. Fires for every MQTT_EVENT_ERROR — a CONNACK
+    // refusal, a TLS failure, a socket error.
+    //
+    // Runs on the app task at loop() cadence, with no transport lock held.
+    // The callback MAY call disconnect() / begin() re-entrantly; the transport
+    // is in a consistent state when it returns. It MUST NOT block — it runs
+    // inside Client::loop(), so a blocking HTTPS re-registration here stalls
+    // the whole state machine. Record intent and act outside the callback;
+    // see docs/api.md.
+    //
+    // Do not call onError() again from inside the callback — that assigns to
+    // this std::function while its target is executing, which is undefined
+    // behaviour.
+    //
+    // Delivery happens while Client is in TransportsConnecting or Connected —
+    // the only states from which Client calls loop(). An error queued outside
+    // those states is retained, not lost, and delivered on the next loop().
+    //
+    // disconnect() does not drain the queue: an error queued before a
+    // teardown is still delivered on the next loop(), potentially after a
+    // subsequent begin() — it reports the error that genuinely happened, not
+    // one from the new session.
+    //
+    // Reporting only: Courier keeps retrying regardless. Recovery policy is
+    // the application's.
+    using ErrorCallback = std::function<void(const ErrorInfo&)>;
+    void onError(ErrorCallback cb) { _onError = cb; }
+
     void loop() override;
 
 private:
@@ -192,6 +255,14 @@ private:
     // Stores topic strings (heap-allocated, freed on drain).
     static constexpr size_t TOPIC_QUEUE_DEPTH = 8;
     SpscQueue<char*, TOPIC_QUEUE_DEPTH> _topicQueue;
+
+    // Error reports from the IDF event task. Single-producer (that task only)
+    // / single-consumer (loop()). Synchronous app-task failures are NOT routed
+    // here — they are already visible through return values — which is what
+    // keeps the SPSC contract intact.
+    static constexpr size_t ERROR_QUEUE_DEPTH = 4;
+    SpscQueue<ErrorInfo, ERROR_QUEUE_DEPTH> _errorQueue;
+    ErrorCallback _onError;
 
     void queueIncomingMqttMessage(const char* topic, const char* payload, size_t len);
 

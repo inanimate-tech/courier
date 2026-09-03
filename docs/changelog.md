@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.8.0-dev
+
+### New
+
+- `MqttTransport::onError(cb)` and `MqttTransport::ErrorInfo` — structured detail for every `MQTT_EVENT_ERROR`. `ErrorInfo::isNotAuthorized()` identifies CONNACK return code 5. See `docs/api.md` for the rescue recipe.
+- The MQTT error log line now names the cause (`"MQTT error: connection refused: not authorized"`).
+
+### Known limits
+
+- No `WebSocketTransport` equivalent: `esp_websocket_event_data_t` carries no `error_handle` before `esp_websocket_client` 1.x on ESP-IDF 5, and the PlatformIO/Arduino path is ESP-IDF 4.4.
+- The error queue is depth 4, drained on the app task at `loop()` cadence; on overflow the oldest four survive. Delivered only while the client is in `TransportsConnecting` or `Connected`.
+
+---
+
 ## v0.7.0
 
 ### New

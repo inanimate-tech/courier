@@ -450,6 +450,7 @@ void setClientId(const char* clientId);   // before begin()
 
 void onMessage(TopicMessageCallback cb);  // (topic, payload, len)
 void onBinary (TopicBinaryCallback cb);   // (topic, data, len)
+void onError  (ErrorCallback cb);         // (const ErrorInfo&)
 
 void onConfigure(ConfigureCallback cb);   // raw esp_mqtt_client_config_t&
 ```
@@ -526,6 +527,97 @@ mqtt.onConfigure([](esp_mqtt_client_config_t& cfg) {
 #endif
 });
 ```
+
+### `onError` — structured connection failures
+
+`onError` fires for every `MQTT_EVENT_ERROR`, carrying the detail ESP-IDF
+reports rather than the bare log line Courier used to emit. Delivery happens
+while `Client` is in `TransportsConnecting` or `Connected` — those are the
+only states from which `Client` calls `loop()`. An error queued outside those
+states (e.g. while `Reconnecting` or parked in terminal `ConnectionFailed`) is
+retained, not lost, and delivered on the next `loop()` call.
+
+```cpp
+struct ErrorInfo {
+    esp_mqtt_error_type_t          type;                // NONE / TCP_TRANSPORT / CONNECTION_REFUSED / SUBSCRIBE_FAILED (IDF >= 5.0)
+    esp_mqtt_connect_return_code_t connectReturnCode;   // valid when type == CONNECTION_REFUSED
+    esp_err_t tlsLastEspErr;                            // valid when type == TCP_TRANSPORT
+    int       tlsStackErr;
+    int       tlsCertVerifyFlags;
+    int       sockErrno;
+
+    bool isConnectionRefused() const;
+    bool isNotAuthorized() const;    // CONNACK 5
+    const char* describe() const;    // static string, never null
+};
+```
+
+On the ESP-IDF >= 5.0 component path, `type` can also come back
+`MQTT_ERROR_TYPE_SUBSCRIBE_FAILED` (a broker-side SUBACK failure) — absent on
+IDF 4.4, so `describe()` does not name it and falls through its `default:`
+case for that value.
+
+The callback runs on the app task at `loop()` cadence with no transport lock
+held. It **may** call `disconnect()`/`begin()` re-entrantly. It **must not**
+block: it runs inside `Client::loop()`, so a blocking HTTPS call here stalls
+the WiFi health check, every other transport's drain, and the state machine.
+Do not call `onError()` again from inside the callback — re-registering would
+assign to the `std::function` while its target is executing, which is
+undefined behaviour; the callback may reconnect, but it must not re-register
+itself.
+
+This is distinct from `Client::onError(category, message)`, which reports
+client-level state transitions as strings. `MqttTransport::onError` reports
+MQTT protocol detail as a struct.
+
+**A refusal is terminal until configuration changes.** `isNotAuthorized()`
+means the broker accepted the packet and rejected this client's authorization
+— distinct from bad credentials (code 4) or a rejected client ID (code 2).
+Retrying with the same identity fails identically, indefinitely. Courier keeps
+retrying regardless; acting on it is the application's job.
+
+**Rescuing a refused connection.** Record intent in the callback, act outside
+it:
+
+```cpp
+auto& mqtt = courier.transport<Courier::MqttTransport>("mqtt");
+
+mqtt.onError([&](const Courier::MqttTransport::ErrorInfo& err) {
+    if (!err.isNotAuthorized()) return;   // TLS/socket: let self-healing work
+    needsReRegistration = true;           // record only — never block here
+});
+
+// ...in loop(), outside the callback:
+if (needsReRegistration) {
+    needsReRegistration = false;
+    if (++rescueAttempts > kMaxRescues) { surfaceToUser(); return; }
+
+    Identity id = registerWithPlatform();   // blocking HTTPS is fine here
+    if (id.valid()) {
+        mqtt.unsubscribe(oldTopic.c_str());
+        mqtt.setClientId(id.clientId.c_str());
+        mqtt.subscribe(id.topic.c_str());
+        oldTopic = id.topic;
+        mqtt.begin();          // destroys + rebuilds internally
+    }
+}
+```
+
+`begin()` rebuilds the IDF client from the transport's current values, and the
+managed topic list survives teardown and is re-applied on connect — so a
+mutated identity sticks, whether you call `begin()` yourself or let Courier's
+reconnection ladder do it.
+
+Do **not** call `Client::reconnect()` here: it tears down all transports and
+forces a full WiFi reconnect, which is the wrong tool when the network is
+healthy. Do **not** call `disconnect()` before `begin()` — `begin()` destroys
+first. Bound your retries; a rescue that keeps being refused will exhaust
+Courier's reconnect budget and reach the terminal `ConnectionFailed` state.
+
+`disconnect()` does not drain the error queue: an error queued just before a
+user-initiated teardown is still delivered on the next `loop()`, potentially
+after a subsequent `begin()`. It reports the error that genuinely happened —
+just don't mistake it for one from the new session.
 
 ## `Courier::UdpTransport`
 

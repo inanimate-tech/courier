@@ -355,6 +355,35 @@ void MqttTransport::queueIncomingMqttMessage(const char* topic, const char* payl
     }
 }
 
+const char* MqttTransport::ErrorInfo::describe() const
+{
+    switch (type) {
+    case MQTT_ERROR_TYPE_CONNECTION_REFUSED:
+        switch (connectReturnCode) {
+        case MQTT_CONNECTION_REFUSE_PROTOCOL:
+            return "connection refused: unacceptable protocol version";
+        case MQTT_CONNECTION_REFUSE_ID_REJECTED:
+            return "connection refused: identifier rejected";
+        case MQTT_CONNECTION_REFUSE_SERVER_UNAVAILABLE:
+            return "connection refused: server unavailable";
+        case MQTT_CONNECTION_REFUSE_BAD_USERNAME:
+            return "connection refused: bad username or password";
+        case MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED:
+            return "connection refused: not authorized";
+        default:
+            return "connection refused: unknown reason";
+        }
+    case MQTT_ERROR_TYPE_TCP_TRANSPORT:
+        return "transport error (TLS or socket)";
+    case MQTT_ERROR_TYPE_NONE:
+        return "no error";
+    default:
+        // MQTT_ERROR_TYPE_SUBSCRIBE_FAILED on IDF 5; unreachable on IDF 4.4.
+        // Named via default: rather than the constant, which 4.4 lacks.
+        return "other MQTT error (e.g. broker-side subscribe failure on IDF >= 5.0)";
+    }
+}
+
 void MqttTransport::loop()
 {
     PendingMessage pmsg;
@@ -388,6 +417,26 @@ void MqttTransport::loop()
     }
 
     drainSignals();
+
+    // Errors drain LAST and with no lock held. Both matter:
+    //  - last, because the callback may disconnect()/begin(), so nothing of
+    //    ours may run after it in this iteration;
+    //  - unlocked, because begin()/disconnect() take _clientLock unbounded and
+    //    would self-deadlock the app task if we held it here (see Lock.h).
+    //
+    // Copy the callback out: the contract lets the callback call begin(),
+    // and a consumer that also re-registers onError() from in there would
+    // otherwise assign to the std::function while its target is running.
+    // Bounded by the queue depth: begin() from inside the callback starts a
+    // client whose task can push new errors into this same drain. The pop
+    // itself is unconditional — with no callback registered, errors are
+    // still popped and discarded so the queue stays empty and quiet rather
+    // than filling up and logging "queue full" on every error thereafter.
+    ErrorCallback cb = _onError;
+    ErrorInfo err;
+    for (size_t i = 0; i < ERROR_QUEUE_DEPTH && _errorQueue.pop(err); ++i) {
+        if (cb) cb(err);
+    }
 }
 
 void MqttTransport::suspend()
@@ -502,9 +551,27 @@ void MqttTransport::mqttEventHandler(void* handler_arg,
         break;
     }
 
-    case MQTT_EVENT_ERROR:
-        ESP_LOGE(TAG, "MQTT error");
+    case MQTT_EVENT_ERROR: {
+        ErrorInfo info;
+        // error_handle is a pointer on both IDF 4.4 and 5.x. Reach the fields
+        // through auto* — the type is named differently by the host mock.
+        if (event->error_handle) {
+            auto* h = event->error_handle;
+            info.type               = (esp_mqtt_error_type_t)h->error_type;
+            info.connectReturnCode  = (esp_mqtt_connect_return_code_t)h->connect_return_code;
+            info.tlsLastEspErr      = h->esp_tls_last_esp_err;
+            info.tlsStackErr        = h->esp_tls_stack_err;
+            info.tlsCertVerifyFlags = h->esp_tls_cert_verify_flags;
+            info.sockErrno          = h->esp_transport_sock_errno;
+        }
+
+        ESP_LOGE(TAG, "MQTT error: %s", info.describe());
+
+        if (!self->_errorQueue.push(info)) {
+            ESP_LOGW(TAG, "error queue full, dropping error report");
+        }
         break;
+    }
 
     default:
         break;

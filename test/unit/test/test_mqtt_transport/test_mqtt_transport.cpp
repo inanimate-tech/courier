@@ -30,6 +30,16 @@ static void onConnectionCallback(Transport* transport, bool connected) {
     lastConnectionState = connected;
 }
 
+static int errorCount = 0;
+static MqttTransport::ErrorInfo lastError;
+static MqttTransport::ErrorInfo errorSequence[8];
+
+static void onErrorCallback(const MqttTransport::ErrorInfo& err) {
+    if (errorCount < 8) errorSequence[errorCount] = err;
+    errorCount++;
+    lastError = err;
+}
+
 static MqttTransport* mqtt = nullptr;
 
 void setUp(void) {
@@ -39,6 +49,9 @@ void setUp(void) {
     lastDeliveredLength = 0;
     connectionEventCount = 0;
     lastConnectionState = false;
+    errorCount = 0;
+    lastError = MqttTransport::ErrorInfo();
+    for (auto& e : errorSequence) e = MqttTransport::ErrorInfo();
 }
 
 void tearDown(void) {
@@ -954,6 +967,317 @@ void test_config_out_buffer_and_network_timeout_passed_through() {
     TEST_ASSERT_EQUAL(3000, client->network_timeout_ms);
 }
 
+// ---------------------------------------------------------------------------
+// ErrorInfo value type
+// ---------------------------------------------------------------------------
+
+void test_error_info_defaults_are_benign() {
+    MqttTransport::ErrorInfo err;
+    TEST_ASSERT_FALSE(err.isConnectionRefused());
+    TEST_ASSERT_FALSE(err.isNotAuthorized());
+    TEST_ASSERT_NOT_NULL(err.describe());
+}
+
+void test_error_info_not_authorized_only_for_connack_5() {
+    MqttTransport::ErrorInfo err;
+    err.type = MQTT_ERROR_TYPE_CONNECTION_REFUSED;
+
+    err.connectReturnCode = MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED;
+    TEST_ASSERT_TRUE(err.isConnectionRefused());
+    TEST_ASSERT_TRUE(err.isNotAuthorized());
+
+    err.connectReturnCode = MQTT_CONNECTION_REFUSE_BAD_USERNAME;   // code 4
+    TEST_ASSERT_TRUE(err.isConnectionRefused());
+    TEST_ASSERT_FALSE(err.isNotAuthorized());
+
+    err.connectReturnCode = MQTT_CONNECTION_REFUSE_ID_REJECTED;    // code 2
+    TEST_ASSERT_FALSE(err.isNotAuthorized());
+}
+
+void test_error_info_stale_connack_does_not_leak_through_tcp_error() {
+    // IDF leaves connect_return_code untouched on a transport error. A stale
+    // value from a previous refusal must not read as an authorization failure.
+    MqttTransport::ErrorInfo err;
+    err.type = MQTT_ERROR_TYPE_TCP_TRANSPORT;
+    err.connectReturnCode = MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED;
+    TEST_ASSERT_FALSE(err.isConnectionRefused());
+    TEST_ASSERT_FALSE(err.isNotAuthorized());
+}
+
+void test_error_info_describe_distinguishes_causes() {
+    MqttTransport::ErrorInfo refused;
+    refused.type = MQTT_ERROR_TYPE_CONNECTION_REFUSED;
+    refused.connectReturnCode = MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED;
+
+    MqttTransport::ErrorInfo badUser;
+    badUser.type = MQTT_ERROR_TYPE_CONNECTION_REFUSED;
+    badUser.connectReturnCode = MQTT_CONNECTION_REFUSE_BAD_USERNAME;
+
+    MqttTransport::ErrorInfo tcp;
+    tcp.type = MQTT_ERROR_TYPE_TCP_TRANSPORT;
+
+    TEST_ASSERT_NOT_NULL(refused.describe());
+    TEST_ASSERT_NOT_NULL(badUser.describe());
+    TEST_ASSERT_NOT_NULL(tcp.describe());
+    // The whole point: these three are no longer the same string.
+    TEST_ASSERT_TRUE(strcmp(refused.describe(), tcp.describe())     != 0);
+    TEST_ASSERT_TRUE(strcmp(refused.describe(), badUser.describe()) != 0);
+    TEST_ASSERT_NOT_NULL(strstr(refused.describe(), "not authorized"));
+}
+
+void test_error_info_describe_handles_unknown_type() {
+    // MQTT_ERROR_TYPE_SUBSCRIBE_FAILED exists only on IDF 5; on IDF 4.4 it
+    // falls to the default arm. Either way describe() returns a valid string.
+    MqttTransport::ErrorInfo err;
+    err.type = MQTT_ERROR_TYPE_SUBSCRIBE_FAILED;
+    TEST_ASSERT_NOT_NULL(err.describe());
+}
+
+// ---------------------------------------------------------------------------
+// onError delivery — capture, queue, drain
+// ---------------------------------------------------------------------------
+
+void test_error_is_queued_not_dispatched_on_the_idf_task() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+        MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
+
+    // The event handler runs on the IDF task; user code must not run there.
+    TEST_ASSERT_EQUAL(0, errorCount);
+
+    mqtt->loop();
+    TEST_ASSERT_EQUAL(1, errorCount);
+}
+
+void test_connack_not_authorized_reaches_the_application() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+        MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, errorCount);
+    TEST_ASSERT_TRUE(lastError.isConnectionRefused());
+    TEST_ASSERT_TRUE(lastError.isNotAuthorized());
+}
+
+void test_connack_bad_username_is_not_reported_as_unauthorized() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+        MQTT_CONNECTION_REFUSE_BAD_USERNAME);
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, errorCount);
+    TEST_ASSERT_TRUE(lastError.isConnectionRefused());
+    TEST_ASSERT_FALSE(lastError.isNotAuthorized());
+}
+
+void test_transport_error_carries_tls_and_socket_detail() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient::lastInstance()->simulateTransportError(
+        -0x2700, 0x7280, 4, 113);
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, errorCount);
+    TEST_ASSERT_FALSE(lastError.isNotAuthorized());
+    TEST_ASSERT_EQUAL(-0x2700, lastError.tlsLastEspErr);
+    TEST_ASSERT_EQUAL(0x7280, lastError.tlsStackErr);
+    TEST_ASSERT_EQUAL(4, lastError.tlsCertVerifyFlags);
+    TEST_ASSERT_EQUAL(113, lastError.sockErrno);
+}
+
+void test_multiple_errors_delivered_in_order_on_one_loop() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient* client = MockMqttClient::lastInstance();
+
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_ID_REJECTED);
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(2, errorCount);
+    TEST_ASSERT_EQUAL(MQTT_CONNECTION_REFUSE_ID_REJECTED,
+                      errorSequence[0].connectReturnCode);
+    TEST_ASSERT_EQUAL(MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED,
+                      errorSequence[1].connectReturnCode);
+}
+
+void test_error_without_registered_callback_is_safe() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    // deliberately no onError()
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+        MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
+    mqtt->loop();
+    TEST_ASSERT_EQUAL(0, errorCount);
+
+    // The queue must actually have drained above, not merely skipped
+    // delivery — otherwise it silently fills to ERROR_QUEUE_DEPTH and every
+    // later error hits the "queue full" drop path. Register a callback now
+    // and fire exactly one more error: if the earlier one had been left
+    // sitting in the queue, this would deliver it too and errorCount would
+    // be 2.
+    mqtt->onError(onErrorCallback);
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_TCP_TRANSPORT, MQTT_CONNECTION_ACCEPTED);
+    mqtt->loop();
+    TEST_ASSERT_EQUAL(1, errorCount);
+    TEST_ASSERT_FALSE(lastError.isConnectionRefused());
+}
+
+void test_error_with_null_handle_does_not_crash() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient::lastInstance()->simulateErrorWithNullHandle();
+    mqtt->loop();
+
+    // Still reported, with benign defaults — an error happened, detail unknown.
+    TEST_ASSERT_EQUAL(1, errorCount);
+    TEST_ASSERT_FALSE(lastError.isNotAuthorized());
+}
+
+void test_error_reporting_does_not_disturb_message_delivery() {
+    mqtt = createWithTopics();       // already wires onMessageCallback
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient* client = MockMqttClient::lastInstance();
+
+    client->simulateConnect();
+    client->simulateMessage("devices/dev123/command", "{\"type\":\"ping\"}");
+    client->simulateError(MQTT_ERROR_TYPE_TCP_TRANSPORT,
+                          MQTT_CONNECTION_ACCEPTED);
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, deliveredMessageCount);
+    TEST_ASSERT_EQUAL(1, errorCount);
+}
+
+// ---------------------------------------------------------------------------
+// Contract guards — queue overflow and callback re-entrancy
+// ---------------------------------------------------------------------------
+
+void test_error_queue_overflow_drops_without_corrupting_earlier_reports() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient* client = MockMqttClient::lastInstance();
+
+    // Depth is 4; push 6 without draining.
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_PROTOCOL);            // 1
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_ID_REJECTED);         // 2
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_SERVER_UNAVAILABLE);  // 3
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_BAD_USERNAME);        // 4
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);      // 5 dropped
+    client->simulateError(MQTT_ERROR_TYPE_TCP_TRANSPORT,
+                          MQTT_CONNECTION_ACCEPTED);                   // 6 dropped
+
+    mqtt->loop();
+
+    // Oldest four survive intact; the newest are dropped, not the earliest.
+    TEST_ASSERT_EQUAL(4, errorCount);
+    TEST_ASSERT_EQUAL(MQTT_CONNECTION_REFUSE_PROTOCOL,
+                      errorSequence[0].connectReturnCode);
+    TEST_ASSERT_EQUAL(MQTT_CONNECTION_REFUSE_BAD_USERNAME,
+                      errorSequence[3].connectReturnCode);
+}
+
+void test_queue_recovers_after_overflow() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient* client = MockMqttClient::lastInstance();
+
+    for (int i = 0; i < 6; i++) {
+        client->simulateError(MQTT_ERROR_TYPE_TCP_TRANSPORT,
+                              MQTT_CONNECTION_ACCEPTED);
+    }
+    mqtt->loop();
+    TEST_ASSERT_EQUAL(4, errorCount);
+
+    errorCount = 0;
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
+    mqtt->loop();
+    TEST_ASSERT_EQUAL(1, errorCount);
+    TEST_ASSERT_TRUE(lastError.isNotAuthorized());
+}
+
+static int reentrantDisconnectCount = 0;
+static int reentrantBeginCount = 0;
+
+static void onErrorCallsDisconnect(const MqttTransport::ErrorInfo& err) {
+    (void)err;
+    reentrantDisconnectCount++;
+    mqtt->disconnect();       // takes _clientLock — must not be held by the drain
+}
+
+static void onErrorCallsBegin(const MqttTransport::ErrorInfo& err) {
+    (void)err;
+    reentrantBeginCount++;
+    if (reentrantBeginCount > 1) return;   // guard against a rescue loop
+    mqtt->setClientId("rescued-client");
+    mqtt->begin();            // destroys + rebuilds; takes _clientLock
+}
+
+void test_callback_may_call_disconnect_reentrantly() {
+    reentrantDisconnectCount = 0;
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallsDisconnect);
+    MockMqttClient::lastInstance()->simulateConnect();
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+        MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
+
+    mqtt->loop();   // hangs here if the drain holds _clientLock
+
+    TEST_ASSERT_EQUAL(1, reentrantDisconnectCount);
+    TEST_ASSERT_FALSE(mqtt->isConnected());
+}
+
+void test_callback_may_call_begin_reentrantly() {
+    // This is the executable guard on the no-lock-held rule (spec 3.4).
+    // begin() acquires _clientLock; if the error drain still held it, this
+    // test would deadlock rather than fail.
+    reentrantBeginCount = 0;
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallsBegin);
+    int before = MockMqttClient::instanceCount();   // after the initial begin()
+
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+        MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, reentrantBeginCount);
+    // A fresh client was built with the rescued identity.
+    TEST_ASSERT_EQUAL(before + 1, MockMqttClient::instanceCount());
+    TEST_ASSERT_EQUAL_STRING(
+        "rescued-client",
+        MockMqttClient::lastInstance()->clientId.c_str());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_name_is_mqtt);
@@ -1014,5 +1338,22 @@ int main(int argc, char **argv) {
     RUN_TEST(test_publish_succeeds_once_the_client_is_free_again);
     RUN_TEST(test_buffer_and_timeout_defaults_are_not_set);
     RUN_TEST(test_config_out_buffer_and_network_timeout_passed_through);
+    RUN_TEST(test_error_info_defaults_are_benign);
+    RUN_TEST(test_error_info_not_authorized_only_for_connack_5);
+    RUN_TEST(test_error_info_stale_connack_does_not_leak_through_tcp_error);
+    RUN_TEST(test_error_info_describe_distinguishes_causes);
+    RUN_TEST(test_error_info_describe_handles_unknown_type);
+    RUN_TEST(test_error_is_queued_not_dispatched_on_the_idf_task);
+    RUN_TEST(test_connack_not_authorized_reaches_the_application);
+    RUN_TEST(test_connack_bad_username_is_not_reported_as_unauthorized);
+    RUN_TEST(test_transport_error_carries_tls_and_socket_detail);
+    RUN_TEST(test_multiple_errors_delivered_in_order_on_one_loop);
+    RUN_TEST(test_error_without_registered_callback_is_safe);
+    RUN_TEST(test_error_with_null_handle_does_not_crash);
+    RUN_TEST(test_error_reporting_does_not_disturb_message_delivery);
+    RUN_TEST(test_error_queue_overflow_drops_without_corrupting_earlier_reports);
+    RUN_TEST(test_queue_recovers_after_overflow);
+    RUN_TEST(test_callback_may_call_disconnect_reentrantly);
+    RUN_TEST(test_callback_may_call_begin_reentrantly);
     return UNITY_END();
 }
