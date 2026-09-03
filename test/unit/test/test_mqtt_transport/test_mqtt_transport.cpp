@@ -51,6 +51,7 @@ void setUp(void) {
     lastConnectionState = false;
     errorCount = 0;
     lastError = MqttTransport::ErrorInfo();
+    for (auto& e : errorSequence) e = MqttTransport::ErrorInfo();
 }
 
 void tearDown(void) {
@@ -1153,6 +1154,117 @@ void test_error_reporting_does_not_disturb_message_delivery() {
     TEST_ASSERT_EQUAL(1, errorCount);
 }
 
+// ---------------------------------------------------------------------------
+// Contract guards — queue overflow and callback re-entrancy
+// ---------------------------------------------------------------------------
+
+void test_error_queue_overflow_drops_without_corrupting_earlier_reports() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient* client = MockMqttClient::lastInstance();
+
+    // Depth is 4; push 6 without draining.
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_PROTOCOL);            // 1
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_ID_REJECTED);         // 2
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_SERVER_UNAVAILABLE);  // 3
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_BAD_USERNAME);        // 4
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);      // 5 dropped
+    client->simulateError(MQTT_ERROR_TYPE_TCP_TRANSPORT,
+                          MQTT_CONNECTION_ACCEPTED);                   // 6 dropped
+
+    mqtt->loop();
+
+    // Oldest four survive intact; the newest are dropped, not the earliest.
+    TEST_ASSERT_EQUAL(4, errorCount);
+    TEST_ASSERT_EQUAL(MQTT_CONNECTION_REFUSE_PROTOCOL,
+                      errorSequence[0].connectReturnCode);
+    TEST_ASSERT_EQUAL(MQTT_CONNECTION_REFUSE_BAD_USERNAME,
+                      errorSequence[3].connectReturnCode);
+}
+
+void test_queue_recovers_after_overflow() {
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallback);
+    MockMqttClient* client = MockMqttClient::lastInstance();
+
+    for (int i = 0; i < 6; i++) {
+        client->simulateError(MQTT_ERROR_TYPE_TCP_TRANSPORT,
+                              MQTT_CONNECTION_ACCEPTED);
+    }
+    mqtt->loop();
+    TEST_ASSERT_EQUAL(4, errorCount);
+
+    errorCount = 0;
+    client->simulateError(MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+                          MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
+    mqtt->loop();
+    TEST_ASSERT_EQUAL(1, errorCount);
+    TEST_ASSERT_TRUE(lastError.isNotAuthorized());
+}
+
+static int reentrantDisconnectCount = 0;
+static int reentrantBeginCount = 0;
+
+static void onErrorCallsDisconnect(const MqttTransport::ErrorInfo& err) {
+    (void)err;
+    reentrantDisconnectCount++;
+    mqtt->disconnect();       // takes _clientLock — must not be held by the drain
+}
+
+static void onErrorCallsBegin(const MqttTransport::ErrorInfo& err) {
+    (void)err;
+    reentrantBeginCount++;
+    if (reentrantBeginCount > 1) return;   // guard against a rescue loop
+    mqtt->setClientId("rescued-client");
+    mqtt->begin();            // destroys + rebuilds; takes _clientLock
+}
+
+void test_callback_may_call_disconnect_reentrantly() {
+    reentrantDisconnectCount = 0;
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallsDisconnect);
+    MockMqttClient::lastInstance()->simulateConnect();
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+        MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
+
+    mqtt->loop();   // hangs here if the drain holds _clientLock
+
+    TEST_ASSERT_EQUAL(1, reentrantDisconnectCount);
+    TEST_ASSERT_FALSE(mqtt->isConnected());
+}
+
+void test_callback_may_call_begin_reentrantly() {
+    // This is the executable guard on the no-lock-held rule (spec 3.4).
+    // begin() acquires _clientLock; if the error drain still held it, this
+    // test would deadlock rather than fail.
+    reentrantBeginCount = 0;
+    mqtt = createWithTopics();
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorCallsBegin);
+    int before = MockMqttClient::instanceCount();   // after the initial begin()
+
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+        MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(1, reentrantBeginCount);
+    // A fresh client was built with the rescued identity.
+    TEST_ASSERT_EQUAL(before + 1, MockMqttClient::instanceCount());
+    TEST_ASSERT_EQUAL_STRING(
+        "rescued-client",
+        MockMqttClient::lastInstance()->clientId.c_str());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_name_is_mqtt);
@@ -1226,5 +1338,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_error_without_registered_callback_is_safe);
     RUN_TEST(test_error_with_null_handle_does_not_crash);
     RUN_TEST(test_error_reporting_does_not_disturb_message_delivery);
+    RUN_TEST(test_error_queue_overflow_drops_without_corrupting_earlier_reports);
+    RUN_TEST(test_queue_recovers_after_overflow);
+    RUN_TEST(test_callback_may_call_disconnect_reentrantly);
+    RUN_TEST(test_callback_may_call_begin_reentrantly);
     return UNITY_END();
 }
