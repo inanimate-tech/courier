@@ -380,7 +380,7 @@ const char* MqttTransport::ErrorInfo::describe() const
     default:
         // MQTT_ERROR_TYPE_SUBSCRIBE_FAILED on IDF 5; unreachable on IDF 4.4.
         // Named via default: rather than the constant, which 4.4 lacks.
-        return "other MQTT error";
+        return "other MQTT error (e.g. broker-side subscribe failure on IDF >= 5.0)";
     }
 }
 
@@ -423,9 +423,18 @@ void MqttTransport::loop()
     //    ours may run after it in this iteration;
     //  - unlocked, because begin()/disconnect() take _clientLock unbounded and
     //    would self-deadlock the app task if we held it here (see Lock.h).
-    ErrorInfo err;
-    while (_errorQueue.pop(err)) {
-        if (_onError) _onError(err);
+    //
+    // Copy the callback out: the contract lets the callback call begin(),
+    // and a consumer that also re-registers onError() from in there would
+    // otherwise assign to the std::function while its target is running.
+    // Bounded by the queue depth: begin() from inside the callback starts a
+    // client whose task can push new errors into this same drain.
+    ErrorCallback cb = _onError;
+    if (cb) {
+        ErrorInfo err;
+        for (size_t i = 0; i < ERROR_QUEUE_DEPTH && _errorQueue.pop(err); ++i) {
+            cb(err);
+        }
     }
 }
 

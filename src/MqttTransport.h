@@ -171,6 +171,19 @@ public:
     // the whole state machine. Record intent and act outside the callback;
     // see docs/api.md.
     //
+    // Do not call onError() again from inside the callback — that assigns to
+    // this std::function while its target is executing, which is undefined
+    // behaviour.
+    //
+    // Delivery happens while Client is in TransportsConnecting or Connected —
+    // the only states from which Client calls loop(). An error queued outside
+    // those states is retained, not lost, and delivered on the next loop().
+    //
+    // disconnect() does not drain the queue: an error queued before a
+    // teardown is still delivered on the next loop(), potentially after a
+    // subsequent begin() — it reports the error that genuinely happened, not
+    // one from the new session.
+    //
     // Reporting only: Courier keeps retrying regardless. Recovery policy is
     // the application's.
     using ErrorCallback = std::function<void(const ErrorInfo&)>;

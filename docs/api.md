@@ -528,14 +528,18 @@ mqtt.onConfigure([](esp_mqtt_client_config_t& cfg) {
 });
 ```
 
-#### `onError` — structured connection failures
+### `onError` — structured connection failures
 
 `onError` fires for every `MQTT_EVENT_ERROR`, carrying the detail ESP-IDF
-reports rather than the bare log line Courier used to emit:
+reports rather than the bare log line Courier used to emit. Delivery happens
+while `Client` is in `TransportsConnecting` or `Connected` — those are the
+only states from which `Client` calls `loop()`. An error queued outside those
+states (e.g. while `Reconnecting` or parked in terminal `ConnectionFailed`) is
+retained, not lost, and delivered on the next `loop()` call.
 
 ```cpp
 struct ErrorInfo {
-    esp_mqtt_error_type_t          type;                // NONE / TCP_TRANSPORT / CONNECTION_REFUSED
+    esp_mqtt_error_type_t          type;                // NONE / TCP_TRANSPORT / CONNECTION_REFUSED / SUBSCRIBE_FAILED (IDF >= 5.0)
     esp_mqtt_connect_return_code_t connectReturnCode;   // valid when type == CONNECTION_REFUSED
     esp_err_t tlsLastEspErr;                            // valid when type == TCP_TRANSPORT
     int       tlsStackErr;
@@ -547,6 +551,11 @@ struct ErrorInfo {
     const char* describe() const;    // static string, never null
 };
 ```
+
+On the ESP-IDF >= 5.0 component path, `type` can also come back
+`MQTT_ERROR_TYPE_SUBSCRIBE_FAILED` (a broker-side SUBACK failure) — absent on
+IDF 4.4, so `describe()` does not name it and falls through its `default:`
+case for that value.
 
 The callback runs on the app task at `loop()` cadence with no transport lock
 held. It **may** call `disconnect()`/`begin()` re-entrantly. It **must not**
