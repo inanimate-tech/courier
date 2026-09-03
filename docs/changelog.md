@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.8.0
+
+### New
+
+- `MqttTransport::onError(cb)` and `MqttTransport::ErrorInfo` — structured detail for every `MQTT_EVENT_ERROR`. `MQTT_EVENT_ERROR` previously logged the string `"MQTT error"` and discarded `error_handle`, so a broker refusal, a TLS failure and a socket error were indistinguishable. `ErrorInfo::isNotAuthorized()` identifies CONNACK return code 5, letting a layer above Courier re-register and reconnect instead of misdiagnosing an authorization refusal as a network fault and burning the reconnect ladder into the terminal `ConnectionFailed` state. Reporting only — Courier keeps retrying; recovery policy is the application's. See `docs/api.md` for the rescue recipe.
+- The MQTT error log line now names the cause (`"MQTT error: connection refused: not authorized"`).
+
+### Known limits
+
+- `WebSocketTransport` has the same gap, and is **not** fixed here. Structured WebSocket error data does not exist before `esp_websocket_client` 1.x on ESP-IDF 5, and the PlatformIO/Arduino path resolves to ESP-IDF 4.4 — where `esp_websocket_event_data_t` carries no `error_handle` at all. A hook there would be empty for most consumers. It follows when the Arduino floor moves to arduino-esp32 3.x.
+- The error queue is depth 4, drained on the app task at `loop()` cadence. Errors arrive at most once per reconnect attempt, so overflow means the app task is stalled; the oldest four survive and the newest are dropped.
+
+---
+
 ## v0.7.0
 
 ### New
