@@ -428,13 +428,14 @@ void MqttTransport::loop()
     // and a consumer that also re-registers onError() from in there would
     // otherwise assign to the std::function while its target is running.
     // Bounded by the queue depth: begin() from inside the callback starts a
-    // client whose task can push new errors into this same drain.
+    // client whose task can push new errors into this same drain. The pop
+    // itself is unconditional — with no callback registered, errors are
+    // still popped and discarded so the queue stays empty and quiet rather
+    // than filling up and logging "queue full" on every error thereafter.
     ErrorCallback cb = _onError;
-    if (cb) {
-        ErrorInfo err;
-        for (size_t i = 0; i < ERROR_QUEUE_DEPTH && _errorQueue.pop(err); ++i) {
-            cb(err);
-        }
+    ErrorInfo err;
+    for (size_t i = 0; i < ERROR_QUEUE_DEPTH && _errorQueue.pop(err); ++i) {
+        if (cb) cb(err);
     }
 }
 

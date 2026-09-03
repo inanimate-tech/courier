@@ -1124,6 +1124,19 @@ void test_error_without_registered_callback_is_safe() {
         MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED);
     mqtt->loop();
     TEST_ASSERT_EQUAL(0, errorCount);
+
+    // The queue must actually have drained above, not merely skipped
+    // delivery — otherwise it silently fills to ERROR_QUEUE_DEPTH and every
+    // later error hits the "queue full" drop path. Register a callback now
+    // and fire exactly one more error: if the earlier one had been left
+    // sitting in the queue, this would deliver it too and errorCount would
+    // be 2.
+    mqtt->onError(onErrorCallback);
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_TCP_TRANSPORT, MQTT_CONNECTION_ACCEPTED);
+    mqtt->loop();
+    TEST_ASSERT_EQUAL(1, errorCount);
+    TEST_ASSERT_FALSE(lastError.isConnectionRefused());
 }
 
 void test_error_with_null_handle_does_not_crash() {
