@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.8.1
+
+### Fixed
+
+- WiFi joins the strongest access point for the SSID. The Arduino default, `WIFI_FAST_SCAN`, joins the first matching AP heard, starting from the channel stored at the last connection, so a device that once joined a distant AP kept rejoining it on every boot and reconnect. `Client` now sets an all-channel scan sorted by signal, both for `WiFi.begin(ssid, pass)` (credentials from the portal) and in the stored STA config that `WiFiManager::autoConnect()` and the Arduino core's auto-reconnect reuse. It is applied before every `autoConnect()`, so Courier's WiFi reconnect path re-picks the AP too. A BSSID pinned by the application is left in place.
+
+### Known limits
+
+- The all-channel scan adds about 2.5 s to each WiFi join (measured on an ESP32-S3: ~0.6-1.2 s to ~3.0 s from STA start to associated).
+- No roaming while connected: a device stays on the AP it joined until the connection drops.
+
+---
+
 ## v0.8.0
 
 ### New

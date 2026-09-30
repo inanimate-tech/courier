@@ -178,6 +178,7 @@ private:
 
   // WiFi helpers
   void setupWiFi();
+  void preferStrongestAccessPoint();
   void launchWiFiConfigPortal();
   static void staticWifiFailedCallback(WiFiManager* wm);
 

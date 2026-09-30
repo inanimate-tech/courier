@@ -5,6 +5,7 @@
 #include <ezTime.h>
 #ifdef ESP_PLATFORM
 #include <esp_netif.h>
+#include <esp_wifi.h>
 #endif
 
 namespace Courier {
@@ -144,6 +145,7 @@ void Client::handleWifiConnectingState()
   {
     _wm.setAPCallback(staticWifiFailedCallback);
     _wm.setConnectTimeout(20);
+    preferStrongestAccessPoint();
     // Let users configure WiFiManager before autoConnect
     if (_wifiConfigureCallback) _wifiConfigureCallback(_wm);
     int res = _wm.autoConnect(_apName.c_str());
@@ -408,7 +410,40 @@ void Client::handleConnectionFailedState()
 void Client::setupWiFi()
 {
   WiFi.mode(WIFI_STA);
+  preferStrongestAccessPoint();
   _wm.setConfigPortalBlocking(false);
+}
+
+// An SSID served by several access points is joined on the strongest one.
+// WIFI_FAST_SCAN, the Arduino default, joins the first matching AP it hears,
+// starting from the channel ESP-IDF stored at the last connection, so a
+// device keeps rejoining a distant AP. An all-channel scan visits every
+// channel whatever that hint, then joins by the sort method.
+//
+// WiFi.setScanMethod/setSortMethod apply to WiFi.begin(ssid, pass), which
+// WiFiManager calls for credentials entered in the portal. autoConnect()
+// joins the saved network with WiFi.begin(), which reuses the stored STA
+// config unchanged, so the stored config's scan and sort methods are
+// rewritten as well. The Arduino core's auto-reconnect after a drop reuses
+// that config. A BSSID pinned by the application is left in place.
+void Client::preferStrongestAccessPoint()
+{
+#ifdef ESP_PLATFORM
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
+
+  wifi_config_t conf;
+  if (esp_wifi_get_config(WIFI_IF_STA, &conf) != ESP_OK) return;
+  if (conf.sta.scan_method == WIFI_ALL_CHANNEL_SCAN &&
+      conf.sta.sort_method == WIFI_CONNECT_AP_BY_SIGNAL) {
+    return;
+  }
+  conf.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+  conf.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+  if (esp_wifi_set_config(WIFI_IF_STA, &conf) != ESP_OK) {
+    Serial.println("[courier] Failed to set all-channel WiFi scan");
+  }
+#endif
 }
 
 void Client::launchWiFiConfigPortal()

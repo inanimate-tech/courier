@@ -223,6 +223,8 @@ courier.onConfigureWiFi([](WiFiManager& wm) {
 
 The `onConfigureWiFi` callback fires before `WiFiManager::autoConnect()` — use it for timeouts, hostname, custom parameters, etc.
 
+Where several access points serve the SSID, `Client` joins the strongest: before each `autoConnect()` it sets an all-channel scan sorted by signal (`WIFI_ALL_CHANNEL_SCAN`, `WIFI_CONNECT_AP_BY_SIGNAL`) on `WiFi` and in the stored STA config. A BSSID pinned in that config is honoured. There is no roaming while connected.
+
 ## `Courier::Transport` (base)
 
 Abstract base. Subclass this only when implementing a custom transport (see [Custom transports](#custom-transports) below).
