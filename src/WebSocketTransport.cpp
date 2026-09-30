@@ -41,6 +41,18 @@ static auto tryAttachCertBundle(C& cfg, int)
 template <typename C>
 static bool tryAttachCertBundle(C&, long) { return false; }
 
+// esp_websocket_client 1.x can reconnect by itself after a server close
+// (enable_close_reconnect, off by default); IDF 4.4's built-in client has no
+// such field and never does. Same compile-time member detection as above.
+template <typename C>
+static auto closeReconnects(const C& cfg, int)
+    -> decltype((void)cfg.enable_close_reconnect, bool())
+{
+    return cfg.enable_close_reconnect;
+}
+template <typename C>
+static bool closeReconnects(const C&, long) { return false; }
+
 WebSocketTransport::WebSocketTransport()
 {
 }
@@ -141,6 +153,9 @@ void WebSocketTransport::begin()
 
     // Allow caller to modify the raw IDF config before init
     if (_configureCallback) _configureCallback(config);
+
+    // Read after the callback: it is where a user turns the option on.
+    _reconnectsOnClose = closeReconnects(config, 0);
 
     _client = esp_websocket_client_init(&config);
     esp_websocket_register_events(_client, WEBSOCKET_EVENT_ANY,
@@ -334,6 +349,30 @@ void WebSocketTransport::wsEventHandler(void* handler_arg,
         }
         break;
     }
+
+    case WEBSOCKET_EVENT_CLOSED:
+        // Clean close initiated by the server. The IDF client echoes the
+        // close frame and then its task EXITS: no DISCONNECTED event, and no
+        // auto-reconnect unless enable_close_reconnect is set. That holds for
+        // IDF 4.4's built-in client and esp_websocket_client 1.x alike.
+        // Left unhandled, _connected stayed true and the device sat with no
+        // socket forever.
+        ESP_LOGW(TAG, "Closed by server");
+        self->_connected.store(false, std::memory_order_release);
+        self->queueConnectionChange(false);
+        // With enable_close_reconnect the client reconnects itself: leave
+        // recovery to it, under the same SELF_HEAL_TIMEOUT as a disconnect.
+        // Otherwise no reconnect can come, so waiting out the timeout would
+        // only delay it — report failure now so Client tears down and
+        // reconnects.
+        if (self->_reconnectsOnClose) {
+            self->_disconnectedSinceMillis = millis();
+            self->_selfHealActive = true;
+        } else {
+            self->_selfHealActive = false;
+            self->queueTransportFailed();
+        }
+        break;
 
     case WEBSOCKET_EVENT_ERROR:
         ESP_LOGE(TAG, "WebSocket error");
