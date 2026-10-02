@@ -428,6 +428,35 @@ void test_reconnect_transitions_through_reconnecting() {
     // verify the public method puts us in Reconnecting state.
 }
 
+// A server-initiated close ends the IDF client for good (no auto-reconnect),
+// so the Client must rebuild the connection itself — and fire onConnected
+// again, which is what lets a layer above re-announce itself (e.g. hello).
+void test_server_close_reconnects_and_refires_on_connected() {
+    int connected = 0, disconnected = 0;
+    courier->onConnected([&]() { connected++; });
+    courier->onDisconnected([&]() { disconnected++; });
+    advanceToConnected();
+    TEST_ASSERT_EQUAL(1, connected);
+    int clientsBefore = MockWebSocketClient::instanceCount();
+
+    MockWebSocketClient::lastInstance()->simulateServerClose();
+    courier->loop();
+    TEST_ASSERT_TRUE(courier->getState() == State::Reconnecting);
+    TEST_ASSERT_EQUAL(1, disconnected);
+
+    // Backoff elapses; Reconnecting -> WifiConnected -> NetworkReady -> TransportsConnecting.
+    for (int i = 0; i < 6 && courier->getState() != State::TransportsConnecting; i++) {
+        _mock_millis += 6000;
+        courier->loop();
+    }
+    courier->loop();  // TransportsConnecting: begin() builds a fresh client
+    TEST_ASSERT_EQUAL(clientsBefore + 1, MockWebSocketClient::instanceCount());
+    MockWebSocketClient::lastInstance()->simulateConnect();
+    courier->loop();
+    TEST_ASSERT_TRUE(courier->getState() == State::Connected);
+    TEST_ASSERT_EQUAL(2, connected);
+}
+
 void test_dns_flush_on_transports_connecting_entry() {
     int before = dnsFlushCountForTests;
     courier->setup();
@@ -1063,6 +1092,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_setEndpoint_overrides_seeded_values);
     RUN_TEST(test_setEndpoint_copies_string_inputs);
     RUN_TEST(test_reconnect_transitions_through_reconnecting);
+    RUN_TEST(test_server_close_reconnects_and_refires_on_connected);
     RUN_TEST(test_dns_flush_on_transports_connecting_entry);
     RUN_TEST(test_https_only_no_auto_ws_and_send_routes);
     RUN_TEST(test_https_reply_reaches_client_onmessage);

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Server-initiated close wedged the connection.** On a WebSocket close frame the ESP-IDF 4.4 client emits `WEBSOCKET_EVENT_CLOSED` (not `DISCONNECTED`) and its task exits without reconnecting. `WebSocketTransport` ignored the event, so it stayed "connected" with no socket, forever. It now reports failure immediately and the Client reconnects.
+
+---
+
 ## v0.9.1
 
 ### Fixed

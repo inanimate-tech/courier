@@ -99,6 +99,16 @@ public:
         }
     }
 
+    // Server-initiated clean close: IDF 4.4 dispatches CLOSED (not
+    // DISCONNECTED) and its client task exits without reconnecting.
+    void simulateServerClose() {
+        connected = false;
+        if (eventHandler) {
+            eventHandler(eventHandlerArg, WEBSOCKET_EVENTS,
+                        WEBSOCKET_EVENT_CLOSED, nullptr);
+        }
+    }
+
     void simulateTextMessage(const char* message) {
         int len = strlen(message);
         esp_websocket_event_data_t data;

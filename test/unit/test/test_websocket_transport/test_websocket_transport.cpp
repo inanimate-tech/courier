@@ -103,6 +103,37 @@ void test_disconnected_after_disconnect_event() {
     TEST_ASSERT_FALSE(ws->isConnected());
 }
 
+void test_server_close_marks_disconnected_and_fails_immediately() {
+    int failures = 0;
+    ws->setFailureCallback([&]() { failures++; });
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    client->simulateConnect();
+    ws->loop();
+    TEST_ASSERT_TRUE(ws->isConnected());
+
+    client->simulateServerClose();
+    ws->loop();  // no SELF_HEAL_TIMEOUT wait: the IDF task has exited
+    TEST_ASSERT_FALSE(ws->isConnected());
+    TEST_ASSERT_FALSE(lastConnectionState);
+    TEST_ASSERT_EQUAL(1, failures);
+
+    ws->loop();  // reported once, not again on later loops
+    TEST_ASSERT_EQUAL(1, failures);
+}
+
+void test_disconnect_event_still_waits_for_self_heal() {
+    int failures = 0;
+    ws->setFailureCallback([&]() { failures++; });
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    client->simulateConnect();
+    ws->loop();
+    client->simulateDisconnect();  // IDF auto-reconnect is still running
+    ws->loop();
+    TEST_ASSERT_EQUAL(0, failures);
+}
+
 void test_message_delivered_to_callback() {
     ws->begin("host", 443, "/path");
     auto* client = MockWebSocketClient::lastInstance();
@@ -351,6 +382,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_begin_starts_client);
     RUN_TEST(test_connected_after_connect_event);
     RUN_TEST(test_disconnected_after_disconnect_event);
+    RUN_TEST(test_server_close_marks_disconnected_and_fails_immediately);
+    RUN_TEST(test_disconnect_event_still_waits_for_self_heal);
     RUN_TEST(test_message_delivered_to_callback);
     RUN_TEST(test_connection_callback_on_connect);
     RUN_TEST(test_connection_callback_on_disconnect);

@@ -335,6 +335,21 @@ void WebSocketTransport::wsEventHandler(void* handler_arg,
         break;
     }
 
+    case WEBSOCKET_EVENT_CLOSED:
+        // Clean close initiated by the server. The IDF client echoes the
+        // close frame and then its task EXITS: no DISCONNECTED event, no
+        // auto-reconnect (IDF 4.4's esp_websocket_client_task sets
+        // run = false on this path). Waiting out SELF_HEAL_TIMEOUT for a
+        // reconnect that cannot come would only delay recovery — report
+        // failure now so Client tears down and reconnects. Left unhandled,
+        // _connected stayed true and the device sat with no socket forever.
+        ESP_LOGW(TAG, "Closed by server");
+        self->_connected.store(false, std::memory_order_release);
+        self->queueConnectionChange(false);
+        self->_selfHealActive = false;
+        self->queueTransportFailed();
+        break;
+
     case WEBSOCKET_EVENT_ERROR:
         ESP_LOGE(TAG, "WebSocket error");
         break;
