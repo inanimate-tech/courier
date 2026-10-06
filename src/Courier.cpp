@@ -95,8 +95,10 @@ void Client::loop()
   // latch) means a genuine NTP correction can repair a system clock that was
   // never bridged, poisoned by a bad HTTP Date, or has simply drifted -
   // small ongoing differences are left alone so this doesn't fight ezTime's
-  // own continuous drift correction on every loop() call.
-  if (timeStatus() == timeSet) {
+  // own continuous drift correction on every loop() call. Gated on the clock
+  // having been set at all, not on ezTime calling it fresh: an overdue NTP
+  // refresh (timeNeedsSync) still leaves ezTime the better clock to follow.
+  if (timeStatus() != timeNotSet) {
     time_t nowUtc = UTC.now();
     if (nowUtc > 0) {
       time_t sysClock = getSystemClock();
@@ -772,7 +774,12 @@ bool Client::isConnected() const
 
 bool Client::isTimeSynced() const
 {
-  return timeStatus() == timeSet;
+  // Not == timeSet: ezTime drops to timeNeedsSync when an NTP refresh is
+  // overdue (NTP_INTERVAL + NTP_STALE_AFTER, ~90 min). On a network that
+  // blocks NTP — first sync from the HTTP Date header — that would read as
+  // "unsynced" an hour and a half after boot while the clock runs on, good
+  // to a couple of seconds a day.
+  return timeStatus() != timeNotSet;
 }
 
 // --- AP name ---
