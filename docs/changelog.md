@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.9.2-dev (ae25794)
+## v0.9.2
 
 ### Fixed
 
