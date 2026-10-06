@@ -711,6 +711,40 @@ void test_ntp_bridge_rebridges_on_divergence() {
     TEST_ASSERT_EQUAL(1771417000, (long)Courier::systemClockForTests);
 }
 
+// On a network that blocks NTP the clock is set from the HTTP Date header,
+// and ezTime later marks its never-arriving NTP refresh stale
+// (timeNeedsSync). The clock is still set: synced stays true, and the
+// ezTime -> system clock bridge keeps running.
+void test_time_stays_synced_when_ntp_goes_stale() {
+    MockHttpClient::ScriptStep dated;
+    dated.status = 200;
+    dated.headers = {{"Date", "Wed, 18 Feb 2026 12:00:00 GMT"}};
+    MockHttpClient::pushScript(dated);   // http:// attempt
+    advanceToConnected();
+    TEST_ASSERT_TRUE(courier->isTimeSynced());
+
+    g_mockTimeStatus = timeNeedsSync;    // NTP overdue, ~90 min later
+    TEST_ASSERT_TRUE(courier->isTimeSynced());
+
+    g_mockTimeStatus = timeNotSet;       // never set: not synced
+    TEST_ASSERT_FALSE(courier->isTimeSynced());
+}
+
+void test_ntp_bridge_runs_while_ntp_is_stale() {
+    g_mockTimeStatus = timeNotSet;       // suppress bridge during connect
+    MockHttpClient::ScriptStep noDate;
+    noDate.status = 200;
+    MockHttpClient::pushScript(noDate);
+    MockHttpClient::pushScript(noDate);
+    advanceToConnected();
+    TEST_ASSERT_EQUAL(0, (long)Courier::systemClockForTests);
+
+    g_mockTimeStatus = timeNeedsSync;    // set once, refresh overdue
+    UTC.setMockNow((time_t)1771416000);
+    courier->loop();
+    TEST_ASSERT_EQUAL(1771416000, (long)Courier::systemClockForTests);
+}
+
 // --- Receive parallels send: onMessage is the default transport's lane only ---
 
 void test_onmessage_fires_for_default_transport_only(void) {
@@ -1078,6 +1112,8 @@ int main(int argc, char** argv) {
     RUN_TEST(test_time_sync_rejects_date_before_build);
     RUN_TEST(test_time_sync_rejects_date_too_far_in_future);
     RUN_TEST(test_ntp_bridge_rebridges_on_divergence);
+    RUN_TEST(test_time_stays_synced_when_ntp_goes_stale);
+    RUN_TEST(test_ntp_bridge_runs_while_ntp_is_stale);
 
     RUN_TEST(test_onmessage_fires_for_default_transport_only);
     RUN_TEST(test_non_default_transport_still_delivers_raw_hook);

@@ -71,6 +71,9 @@ public:
   // --- State ---
   bool isConnected() const;
   State getState() const { return _state; }
+  // True once the network has set the clock (NTP, or the HTTP Date fallback),
+  // and from then on: ezTime marking an overdue NTP refresh stale does not
+  // unset a clock that is still running.
   bool isTimeSynced() const;
 
   // --- Transports ---

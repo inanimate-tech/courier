@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.2-dev (ae25794)
+
+### Fixed
+
+- `Client::isTimeSynced()` stays true once the network has set the clock. It compared ezTime's status with `timeSet`, and ezTime drops to `timeNeedsSync` when an NTP refresh is overdue (`NTP_INTERVAL` + `NTP_STALE_AFTER`, about 90 minutes). On a network that blocks NTP — where the first sync comes from the HTTP Date header — the clock read as unsynced an hour and a half after boot while it ran on, good to a couple of seconds a day. It now means "set at least once" (`timeStatus() != timeNotSet`).
+- The ezTime → system clock bridge in `loop()` keeps running while an NTP refresh is overdue, for the same reason: it was gated on `timeSet` too.
+
+---
+
 ## v0.9.1
 
 ### Fixed
