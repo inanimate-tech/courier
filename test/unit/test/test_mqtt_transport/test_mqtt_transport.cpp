@@ -561,6 +561,199 @@ void test_mqtt_on_configure_not_set_works() {
     TEST_ASSERT_TRUE(client->started);
 }
 
+// --- CONNECT credentials (User Name / Password) ---
+
+void test_credentials_unset_by_default() {
+    mqtt = new MqttTransport();
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    TEST_ASSERT_FALSE(client->hasUsername);
+    TEST_ASSERT_FALSE(client->hasPassword);
+}
+
+void test_config_credentials_reach_client_config() {
+    MqttTransport::Config cfg;
+    cfg.username = "alice";
+    cfg.password = "s3cret";
+    mqtt = new MqttTransport(cfg);
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    TEST_ASSERT_TRUE(client->hasUsername);
+    TEST_ASSERT_EQUAL_STRING("alice", client->username.c_str());
+    TEST_ASSERT_TRUE(client->hasPassword);
+    TEST_ASSERT_EQUAL_STRING("s3cret", client->password.c_str());
+}
+
+void test_config_credentials_are_copied_at_construction() {
+    std::string user = "alice";
+    std::string pass = "s3cret";
+    MqttTransport::Config cfg;
+    cfg.username = user.c_str();
+    cfg.password = pass.c_str();
+    mqtt = new MqttTransport(cfg);
+    user.assign("XXXXX");
+    pass.assign("YYYYYY");
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    TEST_ASSERT_EQUAL_STRING("alice", client->username.c_str());
+    TEST_ASSERT_EQUAL_STRING("s3cret", client->password.c_str());
+}
+
+void test_empty_credentials_are_not_sent() {
+    MqttTransport::Config cfg;
+    cfg.username = "";
+    cfg.password = "";
+    mqtt = new MqttTransport(cfg);
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    TEST_ASSERT_FALSE(client->hasUsername);
+    TEST_ASSERT_FALSE(client->hasPassword);
+}
+
+void test_username_without_password() {
+    MqttTransport::Config cfg;
+    cfg.username = "alice";
+    mqtt = new MqttTransport(cfg);
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    TEST_ASSERT_EQUAL_STRING("alice", client->username.c_str());
+    TEST_ASSERT_FALSE(client->hasPassword);
+}
+
+// MQTT 3.1.1 section 3.1.2.9 forbids the Password Flag without the User Name
+// Flag. esp-mqtt keeps the packet legal itself, by writing a zero-length User
+// Name when it has a password and no user name, so Courier passes the
+// password through unchanged and leaves the user name unset.
+void test_password_without_username_is_passed_through() {
+    MqttTransport::Config cfg;
+    cfg.password = "token-only";
+    mqtt = new MqttTransport(cfg);
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    TEST_ASSERT_FALSE(client->hasUsername);
+    TEST_ASSERT_TRUE(client->hasPassword);
+    TEST_ASSERT_EQUAL_STRING("token-only", client->password.c_str());
+}
+
+void test_set_credentials_before_begin() {
+    mqtt = new MqttTransport();
+    mqtt->setCredentials("bob", "hunter2");
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    TEST_ASSERT_EQUAL_STRING("bob", client->username.c_str());
+    TEST_ASSERT_EQUAL_STRING("hunter2", client->password.c_str());
+}
+
+void test_set_credentials_copies_caller_buffers() {
+    mqtt = new MqttTransport();
+    {
+        std::string user = "bob";
+        std::string pass = "hunter2";
+        mqtt->setCredentials(user.c_str(), pass.c_str());
+        user.assign("XXX");
+        pass.assign("YYYYYYY");
+    }
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    TEST_ASSERT_EQUAL_STRING("bob", client->username.c_str());
+    TEST_ASSERT_EQUAL_STRING("hunter2", client->password.c_str());
+}
+
+void test_set_credentials_replaces_config_credentials() {
+    MqttTransport::Config cfg;
+    cfg.username = "alice";
+    cfg.password = "old";
+    mqtt = new MqttTransport(cfg);
+    mqtt->setCredentials("alice", "new");
+    mqtt->begin("host", 443, "/path");
+    TEST_ASSERT_EQUAL_STRING("new", MockMqttClient::lastInstance()->password.c_str());
+}
+
+void test_set_credentials_nullptr_clears() {
+    MqttTransport::Config cfg;
+    cfg.username = "alice";
+    cfg.password = "s3cret";
+    mqtt = new MqttTransport(cfg);
+    mqtt->setCredentials(nullptr, nullptr);
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    TEST_ASSERT_FALSE(client->hasUsername);
+    TEST_ASSERT_FALSE(client->hasPassword);
+}
+
+// A refreshed password does not touch the running session (esp-mqtt's own
+// reconnects keep what the client was built with) and is used by the next
+// begin(), which builds a fresh client.
+void test_set_credentials_applies_on_next_begin() {
+    MqttTransport::Config cfg;
+    cfg.username = "alice";
+    cfg.password = "token-1";
+    mqtt = new MqttTransport(cfg);
+    mqtt->begin("host", 443, "/path");
+    auto* first = MockMqttClient::lastInstance();
+    first->simulateConnect();
+    mqtt->loop();
+
+    mqtt->setCredentials("alice", "token-2");
+    TEST_ASSERT_EQUAL_STRING("token-1", first->password.c_str());
+    first->simulateDisconnect();
+    mqtt->loop();
+    TEST_ASSERT_EQUAL(1, MockMqttClient::instanceCount());
+
+    mqtt->begin();
+    auto* second = MockMqttClient::lastInstance();
+    TEST_ASSERT_EQUAL(2, MockMqttClient::instanceCount());
+    TEST_ASSERT_EQUAL_STRING("alice", second->username.c_str());
+    TEST_ASSERT_EQUAL_STRING("token-2", second->password.c_str());
+
+    // ...and on every begin() after that, not just the first.
+    mqtt->begin();
+    TEST_ASSERT_EQUAL_STRING("token-2", MockMqttClient::lastInstance()->password.c_str());
+}
+
+static void onErrorRefreshesPassword(const MqttTransport::ErrorInfo& err) {
+    if (!err.isConnectionRefused()) return;
+    mqtt->setCredentials("alice", "token-2");
+    mqtt->begin();
+}
+
+// The documented recovery for CONNACK 4 (bad user name or password): refresh
+// the credentials from the error callback and begin() again.
+void test_set_credentials_and_begin_from_on_error() {
+    MqttTransport::Config cfg;
+    cfg.username = "alice";
+    cfg.password = "token-1";
+    mqtt = new MqttTransport(cfg);
+    mqtt->begin("host", 443, "/path");
+    mqtt->onError(onErrorRefreshesPassword);
+
+    MockMqttClient::lastInstance()->simulateError(
+        MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+        MQTT_CONNECTION_REFUSE_BAD_USERNAME);
+    mqtt->loop();
+
+    TEST_ASSERT_EQUAL(2, MockMqttClient::instanceCount());
+    TEST_ASSERT_EQUAL_STRING("token-2", MockMqttClient::lastInstance()->password.c_str());
+}
+
+void test_on_configure_runs_after_credentials_and_can_override() {
+    MqttTransport::Config cfg;
+    cfg.username = "alice";
+    cfg.password = "s3cret";
+    mqtt = new MqttTransport(cfg);
+    std::string seenUser;
+    mqtt->onConfigure([&](esp_mqtt_client_config_t& config) {
+        seenUser = config.username ? config.username : "";
+        config.username = "override-user";
+        config.password = nullptr;
+    });
+    mqtt->begin("host", 443, "/path");
+    auto* client = MockMqttClient::lastInstance();
+    TEST_ASSERT_EQUAL_STRING("alice", seenUser.c_str());
+    TEST_ASSERT_EQUAL_STRING("override-user", client->username.c_str());
+    TEST_ASSERT_FALSE(client->hasPassword);
+}
+
 // Phase 8: topic-aware receive hook — onMessage(topic, payload, len) fires
 // alongside the existing payload-only callbacks.
 static int onMessageCount = 0;
@@ -1425,5 +1618,18 @@ int main(int argc, char **argv) {
     RUN_TEST(test_queue_recovers_after_overflow);
     RUN_TEST(test_callback_may_call_disconnect_reentrantly);
     RUN_TEST(test_callback_may_call_begin_reentrantly);
+    RUN_TEST(test_credentials_unset_by_default);
+    RUN_TEST(test_config_credentials_reach_client_config);
+    RUN_TEST(test_config_credentials_are_copied_at_construction);
+    RUN_TEST(test_empty_credentials_are_not_sent);
+    RUN_TEST(test_username_without_password);
+    RUN_TEST(test_password_without_username_is_passed_through);
+    RUN_TEST(test_set_credentials_before_begin);
+    RUN_TEST(test_set_credentials_copies_caller_buffers);
+    RUN_TEST(test_set_credentials_replaces_config_credentials);
+    RUN_TEST(test_set_credentials_nullptr_clears);
+    RUN_TEST(test_set_credentials_applies_on_next_begin);
+    RUN_TEST(test_set_credentials_and_begin_from_on_error);
+    RUN_TEST(test_on_configure_runs_after_credentials_and_can_override);
     return UNITY_END();
 }

@@ -421,6 +421,8 @@ Courier::MqttTransport::Config mqttCfg;
 mqttCfg.topics   = {"sensors/+/data", "commands/me"};
 mqttCfg.binaryTopics = {"devices/me/audio"};   // opaque bytes, never JSON-parsed
 mqttCfg.clientId = "my-device-001";
+mqttCfg.username = "my-user";      // CONNECT User Name; nullptr = not sent
+mqttCfg.password = "my-password";  // CONNECT Password;  nullptr = not sent
 mqttCfg.cert_pem = MY_PEM;         // pin a CA — overrides the bundle
 mqttCfg.task_stack = 8192;
 mqttCfg.out_buffer_size = 2048;    // 0 = IDF default (1024)
@@ -432,6 +434,8 @@ mqttCfg.network_timeout_ms = 5000; // 0 = IDF default (10000)
 | `topics` | `std::vector<std::string>` | `{}` | Auto-subscribed on every (re)connect |
 | `binaryTopics` | `std::vector<std::string>` | `{}` | As `topics`, but payloads are delivered to `onBinary` and never enter the text/JSON lane |
 | `clientId` | `const char*` | `nullptr` | MQTT client ID (`nullptr` = ESP-IDF generates one) |
+| `username` | `const char*` | `nullptr` | CONNECT User Name; `nullptr` or `""` = not sent. Copied at construction |
+| `password` | `const char*` | `nullptr` | CONNECT Password; `nullptr` or `""` = not sent. Copied at construction |
 | `cert_pem` | `const char*` | `nullptr` | Pin a specific CA cert (PEM); overrides the bundle when set |
 | `use_cert_bundle` | `bool` | `true` | Validate against the IDF certificate bundle (`esp_crt_bundle_attach`) |
 | `task_stack` | `int` | `8192` | MQTT task stack size in bytes |
@@ -467,6 +471,7 @@ void unsubscribe    (const char* topic);
 static bool topicMatches(const char* filter, const char* topic);  // '+' and '#'
 
 void setClientId(const char* clientId);   // before begin()
+void setCredentials(const char* username, const char* password);  // next begin()
 
 void onMessage(TopicMessageCallback cb);  // (topic, payload, len)
 void onBinary (TopicBinaryCallback cb);   // (topic, data, len)
@@ -480,6 +485,40 @@ void onConfigure(ConfigureCallback cb);   // raw esp_mqtt_client_config_t&
 `publish(topic, JsonDocument&, qos, retain)` is a JSON convenience overload added in 0.4.0 — it serializes `doc` and forwards to the raw text `publish`.
 
 `subscribe` / `subscribeBinary` / `unsubscribe` mutate a managed topic list. Subscriptions are reapplied automatically on every (re)connect, at the QoS they were registered with.
+
+### Credentials
+
+MQTT's CONNECT packet carries an optional User Name and Password (MQTT 3.1.1 sections 3.1.2.8-9 and 3.1.3.4-5; the same fields in MQTT 5). Many brokers require them: a Mosquitto password file, most hosted brokers, and brokers that take an access token as the password. Set them in `Config`, or with `setCredentials()` when they change between connections:
+
+```cpp
+Courier::MqttTransport::Config mqttCfg;
+mqttCfg.username = "my-user";
+mqttCfg.password = currentToken();
+auto& mqtt = courier.addTransport<Courier::MqttTransport>("mqtt", mqttCfg);
+
+// The token was refreshed: used from the next connection on.
+mqtt.setCredentials("my-user", refreshedToken());
+
+// A broker refused the old one (CONNACK 4): refresh and connect again.
+mqtt.onError([&](const Courier::MqttTransport::ErrorInfo& err) {
+    if (err.isConnectionRefused() &&
+        err.connectReturnCode == MQTT_CONNECTION_REFUSE_BAD_USERNAME) {
+        needsNewToken = true;   // record only; fetch the token outside
+    }
+});
+// ...in loop(), outside the callback:
+if (needsNewToken) {
+    needsNewToken = false;
+    mqtt.setCredentials("my-user", fetchToken());
+    mqtt.begin();           // destroys + rebuilds with the new password
+}
+```
+
+- Both fields are copied (`Config` at construction, `setCredentials` on the call), so the caller's buffers need not outlive the call. `nullptr` and `""` both mean "not sent": esp-mqtt omits an empty User Name or Password.
+- **When a change takes effect.** Every `begin()` builds a fresh esp-mqtt client from the transport's current values, so new credentials are used by the next `begin()`: one you call, one from inside `onError`, or the one Courier runs when it escalates a failed transport and reconnects. They do not reach the session already running. esp-mqtt's own auto-reconnect (inside one client) keeps the credentials that client was built with, and Courier does not push them into the live client, because `esp_mqtt_set_config` re-initialises the client's buffers and defaults rather than changing one field. Call `begin()` to apply them at once.
+- **Password without a User Name.** MQTT 3.1.1 section 3.1.2.9 forbids the Password Flag without the User Name Flag. Courier passes the password through and esp-mqtt keeps the packet legal: with a password and no User Name it writes a zero-length User Name and sets its flag (`mqtt_msg_connect` in esp-mqtt's `lib/mqtt_msg.c`, on IDF 4.4 and 5.x). The broker sees an empty User Name. (MQTT 5 allows a password with no User Name outright.)
+- Courier never logs either value.
+- `onConfigure` runs after Courier has filled them in, and can override them (`username`/`password` on ESP-IDF 4.4, `credentials.username`/`credentials.authentication.password` on 5.x).
 
 ### Binary payloads
 
@@ -536,14 +575,13 @@ mqtt.onMessage([](const char* topic, const char* p, size_t len) {
 });
 
 mqtt.onConfigure([](esp_mqtt_client_config_t& cfg) {
+    // Runs after Courier fills its own fields (credentials included).
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-    cfg.credentials.username = "user";
-    cfg.credentials.authentication.password = "pass";
     cfg.session.last_will.topic = "/status";
     cfg.session.last_will.msg = "offline";
 #else
-    cfg.username = "user";
-    cfg.password = "pass";
+    cfg.lwt_topic = "/status";
+    cfg.lwt_msg = "offline";
 #endif
 });
 ```

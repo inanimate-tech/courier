@@ -20,20 +20,24 @@ void setup() {
   Courier::MqttTransport::Config mqttCfg;
   mqttCfg.topics = {"sensors/+/data", "commands/my-device"};
   mqttCfg.clientId = "my-device-001";
+  // CONNECT User Name and Password, for a broker that requires them. Leave
+  // both unset (nullptr) for an anonymous broker. A password that changes
+  // between connections (an expiring token, say) goes through
+  // mqtt.setCredentials(user, pass), used from the next connect.
+  mqttCfg.username = "my-user";
+  mqttCfg.password = "my-password";
   auto& mqtt = courier.addTransport<Courier::MqttTransport>("mqtt", mqttCfg);
 
   mqtt.onConfigure([](esp_mqtt_client_config_t& cfg) {
-    // Set username/password, LWT, keepalive, etc.
-    // These fields map directly to the ESP-IDF MQTT client config.
+    // LWT, keepalive, etc. These fields map directly to the ESP-IDF MQTT
+    // client config, and run after Courier has filled in its own.
     // See: https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/protocols/mqtt.html
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-    cfg.credentials.username = "my-user";
-    cfg.credentials.authentication.password = "my-password";
     cfg.session.last_will.topic = "devices/my-device/status";
     cfg.session.last_will.msg = "offline";
 #else
-    cfg.username = "my-user";
-    cfg.password = "my-password";
+    cfg.lwt_topic = "devices/my-device/status";
+    cfg.lwt_msg = "offline";
 #endif
   });
 

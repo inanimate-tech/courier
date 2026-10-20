@@ -89,6 +89,8 @@ typedef struct {
     const char* cert_pem;
     esp_err_t (*crt_bundle_attach)(void* conf);
     const char* client_id;
+    const char* username;
+    const char* password;
     bool disable_auto_reconnect;
     void* user_context;
     int task_stack;
@@ -106,6 +108,12 @@ public:
     std::string cert_pem;
     esp_err_t (*crt_bundle_attach)(void*) = nullptr;
     std::string clientId;
+    // nullptr in the config (not sent) is recorded as has* = false, so a test
+    // can tell "unset" from "set to something".
+    bool hasUsername = false;
+    std::string username;
+    bool hasPassword = false;
+    std::string password;
     bool disable_auto_reconnect = false;
     int out_buffer_size = 0;
     int network_timeout_ms = 0;
@@ -262,6 +270,11 @@ inline esp_mqtt_client_handle_t esp_mqtt_client_init(
     if (config->cert_pem) client->cert_pem = config->cert_pem;
     client->crt_bundle_attach = config->crt_bundle_attach;
     if (config->client_id) client->clientId = config->client_id;
+    // Copied, as esp-mqtt does: the caller's buffers need not outlive init.
+    client->hasUsername = config->username != nullptr;
+    if (config->username) client->username = config->username;
+    client->hasPassword = config->password != nullptr;
+    if (config->password) client->password = config->password;
     client->disable_auto_reconnect = config->disable_auto_reconnect;
     client->out_buffer_size = config->out_buffer_size;
     client->network_timeout_ms = config->network_timeout_ms;

@@ -4,6 +4,7 @@
 
 ### New
 
+- `MqttTransport::Config::username` and `password`, and `MqttTransport::setCredentials(username, password)`: the MQTT CONNECT packet's User Name and Password, for brokers that require them (a Mosquitto password file, hosted brokers, brokers that take a token as the password). Until now they could only be set through `onConfigure`, whose field names differ between ESP-IDF 4.4 (`username`, `password`) and 5.x (`credentials.username`, `credentials.authentication.password`); Courier now fills whichever the build has. Both are copied, `nullptr` or `""` means not sent, and neither is logged. `setCredentials` takes effect on the next `begin()`, which includes the `begin()` Courier runs when it reconnects a failed transport, and not on the session already running. `onConfigure` still runs afterwards and can override them. A password with no user name is passed through; esp-mqtt sends it with a zero-length User Name, as MQTT 3.1.1 section 3.1.2.9 requires. See `docs/api.md`.
 - `Response::header("Retry-After")`: the response's `Retry-After`, as the server sent it (delta-seconds or an HTTP date), or `nullptr` when absent. A caller can now wait as a `429 Too Many Requests` or `503 Service Unavailable` asks.
 
 ### Fixed

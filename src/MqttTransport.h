@@ -17,6 +17,9 @@ public:
     // Configuration struct for MqttTransport.
     // topics: auto-subscribed on (re)connect.
     // clientId: if set, used as MQTT client ID; otherwise IDF generates one.
+    // username / password: the CONNECT packet's User Name and Password
+    // (MQTT 3.1.1 section 3.1.3.4-5). nullptr or "" = not sent. Copied at
+    // construction. See setCredentials() for credentials that change.
     // TLS precedence: cert_pem (pin) > use_cert_bundle (IDF certificate
     // bundle, the default; requires MBEDTLS_CERTIFICATE_BUNDLE) > nothing.
     struct Config {
@@ -25,6 +28,8 @@ public:
         // and never through the text / JSON lane. See subscribeBinary().
         std::vector<std::string> binaryTopics;
         const char* clientId = nullptr;
+        const char* username = nullptr;
+        const char* password = nullptr;
         const char* cert_pem = nullptr;
         bool use_cert_bundle = true;
         int task_stack = 8192;
@@ -58,6 +63,25 @@ public:
 
     // Set the MQTT client ID (must be called before begin()).
     void setClientId(const char* clientId) { _configClientId = clientId ? clientId : ""; }
+
+    // Set the CONNECT packet's User Name and Password, replacing any from
+    // Config. Both strings are copied; nullptr or "" = not sent.
+    //
+    // Takes effect on the next begin(), which builds a fresh esp-mqtt client.
+    // That includes the begin() Client runs when it escalates a failed
+    // transport, and one called from inside onError(). It does NOT change the
+    // session already running: esp-mqtt's own auto-reconnect keeps the
+    // credentials that client was built with. To apply new credentials now,
+    // call begin() (or Client::reconnect()).
+    //
+    // A password with no user name is passed through: esp-mqtt then sends a
+    // zero-length User Name with its flag set, which keeps the packet legal
+    // under MQTT 3.1.1 section 3.1.2.9 (no Password Flag without the User
+    // Name Flag).
+    //
+    // Never logged. Safe to call from any task; takes the client lock, so do
+    // not call it from inside onConfigure() (begin() holds that lock there).
+    void setCredentials(const char* username, const char* password);
 
     // MQTT requires a topic — set options.topic. Serializes the JSON
     // document and routes through publish() with options.qos / .retain.
@@ -220,6 +244,10 @@ private:
     mutable Mutex _topicsLock;
 
     std::string _configClientId;   // optional override from Config
+    // CONNECT credentials; empty = not sent. Read by begin() under
+    // _clientLock, written by setCredentials() under the same lock.
+    std::string _username;
+    std::string _password;
 
     // Managed topic list — single source of truth for subscriptions.
     // Explicit constructor rather than default member initialisers: the

@@ -49,6 +49,15 @@ MqttTransport::MqttTransport(const Config& config)
     if (config.clientId) {
         _configClientId = config.clientId;
     }
+    if (config.username) _username = config.username;
+    if (config.password) _password = config.password;
+}
+
+void MqttTransport::setCredentials(const char* username, const char* password)
+{
+    LockGuard<TimedMutex> guard(_clientLock);
+    _username = username ? username : "";
+    _password = password ? password : "";
 }
 
 void MqttTransport::onConfigure(ConfigureCallback cb)
@@ -300,6 +309,8 @@ void MqttTransport::begin()
         config.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
     }
     config.credentials.client_id = _configClientId.empty() ? nullptr : _configClientId.c_str();
+    config.credentials.username = _username.empty() ? nullptr : _username.c_str();
+    config.credentials.authentication.password = _password.empty() ? nullptr : _password.c_str();
     config.task.stack_size = _taskStack;
     if (_outBufferSize > 0)     config.buffer.out_size = _outBufferSize;
     if (_networkTimeoutMs > 0)  config.network.timeout_ms = _networkTimeoutMs;
@@ -311,13 +322,17 @@ void MqttTransport::begin()
         config.crt_bundle_attach = esp_crt_bundle_attach;
     }
     config.client_id = _configClientId.empty() ? nullptr : _configClientId.c_str();
+    config.username = _username.empty() ? nullptr : _username.c_str();
+    config.password = _password.empty() ? nullptr : _password.c_str();
     config.task_stack = _taskStack;
     if (_outBufferSize > 0)     config.out_buffer_size = _outBufferSize;
     if (_networkTimeoutMs > 0)  config.network_timeout_ms = _networkTimeoutMs;
     config.user_context = this;
 #endif
 
-    // Allow caller to modify the raw IDF config before init
+    // Allow caller to modify the raw IDF config before init. esp-mqtt copies
+    // every string it is given (esp_mqtt_set_config strdup's them), so the
+    // pointers above need only outlive esp_mqtt_client_init.
     if (_configureCallback) _configureCallback(config);
 
     _client = esp_mqtt_client_init(&config);

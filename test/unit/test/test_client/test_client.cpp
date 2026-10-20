@@ -996,6 +996,51 @@ void test_did_connect_hook_can_reconnect() {
     TEST_ASSERT_EQUAL(0, connectedCount);
 }
 
+// MqttTransport::setCredentials() applies on the next begin(). Client's own
+// self-healing is one such begin(): an MQTT transport that stays down past
+// its self-heal timeout escalates to a full reconnect, which begins every
+// transport again with a fresh esp-mqtt client.
+void test_mqtt_credentials_refreshed_by_self_healing_reconnect() {
+    delete courier;
+    MockMqttClient::resetInstanceCount();
+    Config config;
+    config.host = "broker.example.com";
+    config.port = 443;
+    config.path = "/mqtt";
+    config.defaultTransport = "mqtt";
+    courier = new Client(config);
+
+    MqttTransport::Config mcfg;
+    mcfg.username = "alice";
+    mcfg.password = "token-1";
+    auto& mqtt = courier->addTransport<MqttTransport>("mqtt", mcfg);
+
+    courier->setup();
+    for (int i = 0; i < 10 && MockMqttClient::instanceCount() == 0; i++) {
+        courier->loop();
+    }
+    TEST_ASSERT_EQUAL(1, MockMqttClient::instanceCount());
+    auto* first = MockMqttClient::lastInstance();
+    TEST_ASSERT_EQUAL_STRING("token-1", first->password.c_str());
+    first->simulateConnect();
+    courier->loop();
+    TEST_ASSERT_TRUE(courier->getState() == State::Connected);
+
+    mqtt.setCredentials("alice", "token-2");
+    first->simulateDisconnect();
+    courier->loop();
+
+    // Past the 60 s self-heal timeout, then through the reconnect backoff.
+    for (int i = 0; i < 200 && MockMqttClient::instanceCount() == 1; i++) {
+        _mock_millis += 1000;
+        courier->loop();
+    }
+    TEST_ASSERT_EQUAL(2, MockMqttClient::instanceCount());
+    auto* second = MockMqttClient::lastInstance();
+    TEST_ASSERT_EQUAL_STRING("alice", second->username.c_str());
+    TEST_ASSERT_EQUAL_STRING("token-2", second->password.c_str());
+}
+
 void test_connection_change_to_connected_can_enter_network_ready() {
     std::vector<std::string> events;
     bool entered = false;
@@ -1130,6 +1175,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_network_ready_hook_can_redirect_the_machine);
     RUN_TEST(test_did_connect_hook_can_enter_network_ready);
     RUN_TEST(test_did_connect_hook_can_reconnect);
+    RUN_TEST(test_mqtt_credentials_refreshed_by_self_healing_reconnect);
     RUN_TEST(test_connection_change_to_connected_can_enter_network_ready);
     RUN_TEST(test_network_ready_boot_pass_with_wifi_down_rejoins_wifi);
     RUN_TEST(test_network_ready_wifi_drop_during_hook_rejoins_wifi);
