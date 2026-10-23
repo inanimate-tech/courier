@@ -57,6 +57,7 @@ private:
     static constexpr unsigned long SELF_HEAL_TIMEOUT = 60000;  // 60 seconds
     unsigned long _disconnectedSinceMillis = 0;
     bool _selfHealActive = false;
+    bool _reconnectsOnClose = false;  // enable_close_reconnect, as begin() saw it
 
     const char* _certPem = nullptr;
     bool _useCertBundle = true;

@@ -346,6 +346,8 @@ Booting -> WifiConnecting -> WifiConnected -> NetworkReady -> TransportsConnecti
 
 `onConnectionChange` fires on every transition. `onError` fires alongside transitions caused by failures, with a category string (`"WIFI"`, `"TRANSPORT"`, `"TIME_SYNC"`, etc.) and a reason.
 
+A clean close from the server (a WebSocket close frame) ends the ESP-IDF client for good — it does not auto-reconnect — so `WebSocketTransport` reports failure at once and the Client runs its full reconnect path, without waiting out the 60 s self-heal window.
+
 ## `Courier::WebSocketTransport`
 
 Wraps `esp_websocket_client`. Always implicitly available via `<Courier.h>`.

@@ -6,6 +6,9 @@
 
 - `HttpTransport::fetch()` returns the status the server sent when `esp_http_client_perform()` fails after reading the response's headers. IDF 5.x fails it for a `401` it cannot answer with credentials (`ESP_ERR_NOT_SUPPORTED`, whether or not the response carries `WWW-Authenticate`), for a redirect it will not follow (no `Location`, or `https` to `http`), and for a response whose connection closes before its body arrives (`ESP_ERR_HTTP_INCOMPLETE_DATA`). Each was reported as `Http::ErrConnect` and retried, with DNS flushes, until the retries ran out, and a streaming caller's `onResponse` never fired: a `401` whose body came after its headers reached the caller as `-1002`. A non-2xx status of the current hop is now the response, and `onResponse` fires for it. A `2xx` with no body bytes, and the `3xx` a finished redirect leaves behind when the next hop fails to connect, are still transport errors and still retried. ([#30](https://github.com/inanimate-tech/courier/issues/30))
 - `Response::complete()` says whether the whole body arrived when `perform()` failed after the headers. It was `false` for a response whose whole body came in the same read as its headers, and `true` for one whose body was never read (a non-2xx on IDF 4.4 with `disable_auto_redirect`). It now compares the body bytes received with `Content-Length`, and is `false` when the length is unknown. A `3xx` stays complete, as when `perform()` succeeds: its body is never kept.
+- **Server-initiated close wedged the connection.** On a WebSocket close frame the client emits `WEBSOCKET_EVENT_CLOSED` (not `DISCONNECTED`) and its task exits without reconnecting. This is so on both of Courier's paths: IDF 4.4's built-in client (Arduino 2.x) and `esp_websocket_client` 1.x (IDF 5). `WebSocketTransport` ignored the event, so it stayed "connected" with no socket, forever. It now reports failure immediately and the Client reconnects.
+
+---
 
 ## v0.10.0
 
