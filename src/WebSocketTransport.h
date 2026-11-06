@@ -55,9 +55,15 @@ public:
 private:
     // Self-healing: track disconnect time for failure escalation
     static constexpr unsigned long SELF_HEAL_TIMEOUT = 60000;  // 60 seconds
+    // After a server close that nothing will reconnect: long enough for
+    // IDF 4.4's client task, which exits by itself after CLOSED, to finish
+    // before Client's teardown destroys the handle under it.
+    static constexpr unsigned long CLOSE_FAILURE_DELAY = 100;
     unsigned long _disconnectedSinceMillis = 0;
+    unsigned long _selfHealTimeout = SELF_HEAL_TIMEOUT;
     bool _selfHealActive = false;
     bool _reconnectsOnClose = false;  // enable_close_reconnect, as begin() saw it
+    std::atomic<bool> _closedByServer{false};  // set by CLOSED, taken by loop()
 
     const char* _certPem = nullptr;
     bool _useCertBundle = true;
