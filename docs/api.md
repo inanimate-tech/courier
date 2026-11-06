@@ -346,7 +346,7 @@ Booting -> WifiConnecting -> WifiConnected -> NetworkReady -> TransportsConnecti
 
 `onConnectionChange` fires on every transition. `onError` fires alongside transitions caused by failures, with a category string (`"WIFI"`, `"TRANSPORT"`, `"TIME_SYNC"`, etc.) and a reason.
 
-A clean close from the server (a WebSocket close frame) ends the ESP-IDF client for good — it does not auto-reconnect — so `WebSocketTransport` reports failure at once and the Client runs its full reconnect path, without waiting out the 60 s self-heal window.
+A clean close from the server (a WebSocket close frame) ends the ESP-IDF client for good — it does not auto-reconnect — so `WebSocketTransport` reports failure 100 ms later and the Client runs its full reconnect path, without waiting out the 60 s self-heal window. With `enable_close_reconnect` set through `onConfigure` (`esp_websocket_client` 1.x only), the client reconnects by itself and the 60 s window applies, as for a disconnect.
 
 ## `Courier::WebSocketTransport`
 
@@ -878,3 +878,4 @@ courier.onConnectionChange([](Courier::State s) {
 | `MAX_RECONNECT_ATTEMPTS` | 10 | Hard limit before `State::ConnectionFailed` |
 | Per-transport queue depth | 8 | SPSC FIFO capacity for incoming frames |
 | Self-heal timeout | 60000 ms | Per-transport disconnect window before failure is reported |
+| WebSocket close delay | 100 ms | Delay before a server close is reported as failure (unless `enable_close_reconnect`) |
