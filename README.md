@@ -180,8 +180,7 @@ courier.transport<Courier::MqttTransport>("mqtt").publishBinary("topic", data, l
 
 // Transports — Client constructs and owns
 auto& mqtt = courier.addTransport<Courier::MqttTransport>("mqtt", mqttCfg);
-courier.suspend();   // free SRAM for OTA
-courier.resume();
+courier.enterNetworkReady();   // drop transports, keep WiFi (e.g. a large HTTPS download)
 
 // Callbacks (single-slot, last registration wins)
 courier.onMessage([](const char* transportName, const char* type, JsonDocument& doc) { });

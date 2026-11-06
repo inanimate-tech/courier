@@ -85,11 +85,11 @@ courier.setup();    // Initialize WiFi and start transports
 courier.loop();     // Call from your main loop / a FreeRTOS task
 ```
 
-`suspend()` and `resume()` tear transports down and bring them back — used to free SRAM / task stacks during OTA updates.
+`suspend()` and `resume()` stop each transport's client in place and start it again. The state machine is not told: the state stays `Connected` and `onDisconnected` does not fire. To free RAM for work that needs the network but not the transports, such as a large HTTPS download (a firmware image, say) that cannot share RAM with a second TLS session, use `enterNetworkReady()` below, which tears the transports down through the state machine and brings them back when the `onNetworkReady` hook returns.
 
 ```cpp
 courier.suspend();
-// ... perform OTA ...
+// ... transports stopped, state still Connected ...
 courier.resume();
 ```
 
@@ -278,7 +278,7 @@ Optional overrides (with sensible defaults):
 |--------|---------|-------------|
 | `loop()` | `drainPending()` | Called every main-loop iteration |
 | `isPersistent()` | returns `true` | If false, excluded from failure escalation |
-| `suspend()` / `resume()` | no-ops | OTA hook |
+| `suspend()` / `resume()` | no-ops | Stop / restart the client in place; called by `Client::suspend()` / `resume()` |
 | `setEndpoint(host, port, path)` | copies into `_host`/`_port`/`_path` | Override only if you need custom endpoint validation |
 
 Note: `sendBinary` and `publish` are **not** on the base. `WebSocketTransport::sendBinary` is WS-specific. `MqttTransport::publish` / `publishBinary` are MQTT-specific. Custom transports are not required to implement either.
