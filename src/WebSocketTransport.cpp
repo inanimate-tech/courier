@@ -111,6 +111,7 @@ void WebSocketTransport::freeReassemblyBuf()
 void WebSocketTransport::destroyClient()
 {
     _selfHealActive = false;
+    _selfHealTimeout = SELF_HEAL_TIMEOUT;
     if (_client) {
         esp_websocket_client_stop(_client);
         esp_websocket_client_destroy(_client);
@@ -118,6 +119,8 @@ void WebSocketTransport::destroyClient()
     }
     freeReassemblyBuf();
     _connected.store(false, std::memory_order_release);
+    // A close the old client reported must not fail the next connection.
+    _closedByServer.store(false, std::memory_order_release);
 }
 
 void WebSocketTransport::begin()
@@ -172,10 +175,21 @@ void WebSocketTransport::loop()
 {
     drainPending();
 
+    // A server close ends the IDF client unless enable_close_reconnect is
+    // set, so nothing will reconnect it: fail after CLOSE_FAILURE_DELAY rather
+    // than SELF_HEAL_TIMEOUT. Either way the one self-heal timer reports it,
+    // once, however many of DISCONNECTED and CLOSED arrive.
+    if (_closedByServer.exchange(false, std::memory_order_acq_rel)) {
+        _disconnectedSinceMillis = millis();
+        _selfHealTimeout = _reconnectsOnClose ? SELF_HEAL_TIMEOUT
+                                              : CLOSE_FAILURE_DELAY;
+        _selfHealActive = true;
+    }
+
     if (_selfHealActive) {
         if (_connected.load(std::memory_order_acquire)) {
             _selfHealActive = false;
-        } else if (millis() - _disconnectedSinceMillis >= SELF_HEAL_TIMEOUT) {
+        } else if (millis() - _disconnectedSinceMillis >= _selfHealTimeout) {
             _selfHealActive = false;
             queueTransportFailed();
             drainPending();  // Deliver failure callback immediately
@@ -351,27 +365,18 @@ void WebSocketTransport::wsEventHandler(void* handler_arg,
     }
 
     case WEBSOCKET_EVENT_CLOSED:
-        // Clean close initiated by the server. The IDF client echoes the
-        // close frame and then its task EXITS: no DISCONNECTED event, and no
+        // The server closed cleanly. The IDF client echoes the close frame,
+        // dispatches CLOSED (not DISCONNECTED) and its task exits, with no
         // auto-reconnect unless enable_close_reconnect is set. That holds for
-        // IDF 4.4's built-in client and esp_websocket_client 1.x alike.
-        // Left unhandled, _connected stayed true and the device sat with no
-        // socket forever.
+        // IDF 4.4's built-in client and esp_websocket_client 1.x alike. Left
+        // unhandled, _connected stayed true with no socket, for good.
+        // IDF 4.4's task is still closing its transport here, and its
+        // destroy() does not wait for a task that stopped itself, so the
+        // failure is reported from loop(), not queued now.
         ESP_LOGW(TAG, "Closed by server");
         self->_connected.store(false, std::memory_order_release);
         self->queueConnectionChange(false);
-        // With enable_close_reconnect the client reconnects itself: leave
-        // recovery to it, under the same SELF_HEAL_TIMEOUT as a disconnect.
-        // Otherwise no reconnect can come, so waiting out the timeout would
-        // only delay it — report failure now so Client tears down and
-        // reconnects.
-        if (self->_reconnectsOnClose) {
-            self->_disconnectedSinceMillis = millis();
-            self->_selfHealActive = true;
-        } else {
-            self->_selfHealActive = false;
-            self->queueTransportFailed();
-        }
+        self->_closedByServer.store(true, std::memory_order_release);
         break;
 
     case WEBSOCKET_EVENT_ERROR:

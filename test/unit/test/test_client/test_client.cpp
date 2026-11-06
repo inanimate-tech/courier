@@ -428,6 +428,19 @@ void test_reconnect_transitions_through_reconnecting() {
     // verify the public method puts us in Reconnecting state.
 }
 
+// From Reconnecting: let the backoff elapse, then connect the fresh WS client
+// that TransportsConnecting builds.
+static void reconnectToConnected() {
+    // Reconnecting -> WifiConnected -> NetworkReady -> TransportsConnecting.
+    for (int i = 0; i < 6 && courier->getState() != State::TransportsConnecting; i++) {
+        _mock_millis += 6000;
+        courier->loop();
+    }
+    courier->loop();  // TransportsConnecting: begin() builds a fresh client
+    MockWebSocketClient::lastInstance()->simulateConnect();
+    courier->loop();
+}
+
 // A server-initiated close ends the IDF client for good (no auto-reconnect),
 // so the Client must rebuild the connection itself — and fire onConnected
 // again, which is what lets a layer above re-announce itself (e.g. hello).
@@ -441,20 +454,73 @@ void test_server_close_reconnects_and_refires_on_connected() {
 
     MockWebSocketClient::lastInstance()->simulateServerClose();
     courier->loop();
+    _mock_millis += 100;  // not the 60 s self-heal window
+    courier->loop();
     TEST_ASSERT_TRUE(courier->getState() == State::Reconnecting);
     TEST_ASSERT_EQUAL(1, disconnected);
 
-    // Backoff elapses; Reconnecting -> WifiConnected -> NetworkReady -> TransportsConnecting.
-    for (int i = 0; i < 6 && courier->getState() != State::TransportsConnecting; i++) {
-        _mock_millis += 6000;
-        courier->loop();
-    }
-    courier->loop();  // TransportsConnecting: begin() builds a fresh client
+    reconnectToConnected();
     TEST_ASSERT_EQUAL(clientsBefore + 1, MockWebSocketClient::instanceCount());
-    MockWebSocketClient::lastInstance()->simulateConnect();
-    courier->loop();
     TEST_ASSERT_TRUE(courier->getState() == State::Connected);
     TEST_ASSERT_EQUAL(2, connected);
+}
+
+// DISCONNECTED and CLOSED from one connection: one escalation, one rebuild.
+void test_server_close_with_disconnect_reconnects_once() {
+    int connected = 0, disconnected = 0;
+    courier->onConnected([&]() { connected++; });
+    courier->onDisconnected([&]() { disconnected++; });
+    advanceToConnected();
+    int clientsBefore = MockWebSocketClient::instanceCount();
+
+    MockWebSocketClient::lastInstance()->simulateDisconnect();
+    MockWebSocketClient::lastInstance()->simulateServerClose();
+    courier->loop();
+    _mock_millis += 100;
+    courier->loop();
+    TEST_ASSERT_TRUE(courier->getState() == State::Reconnecting);
+
+    reconnectToConnected();
+    TEST_ASSERT_TRUE(courier->getState() == State::Connected);
+
+    // Nothing left over from the old connection fails the new one.
+    for (int i = 0; i < 20; i++) {
+        _mock_millis += 5000;
+        courier->loop();
+    }
+    TEST_ASSERT_TRUE(courier->getState() == State::Connected);
+    TEST_ASSERT_EQUAL(1, disconnected);
+    TEST_ASSERT_EQUAL(2, connected);
+    TEST_ASSERT_EQUAL(clientsBefore + 1, MockWebSocketClient::instanceCount());
+}
+
+// A close that lands as the Client heads into Reconnecting for another reason
+// (here a manual reconnect(), before loop() has seen the close) is spent with
+// the client it came from: the reconnect runs once and the next connection
+// stays up.
+void test_server_close_during_reconnecting_reconnects_once() {
+    int connected = 0, disconnected = 0;
+    courier->onConnected([&]() { connected++; });
+    courier->onDisconnected([&]() { disconnected++; });
+    advanceToConnected();
+    int clientsBefore = MockWebSocketClient::instanceCount();
+
+    MockWebSocketClient::lastInstance()->simulateServerClose();
+    courier->reconnect();
+    TEST_ASSERT_TRUE(courier->getState() == State::Reconnecting);
+    courier->loop();
+    TEST_ASSERT_TRUE(courier->getState() == State::Reconnecting);
+
+    reconnectToConnected();
+    TEST_ASSERT_TRUE(courier->getState() == State::Connected);
+    for (int i = 0; i < 20; i++) {
+        _mock_millis += 5000;
+        courier->loop();
+    }
+    TEST_ASSERT_TRUE(courier->getState() == State::Connected);
+    TEST_ASSERT_EQUAL(1, disconnected);
+    TEST_ASSERT_EQUAL(2, connected);
+    TEST_ASSERT_EQUAL(clientsBefore + 1, MockWebSocketClient::instanceCount());
 }
 
 void test_dns_flush_on_transports_connecting_entry() {
@@ -1127,6 +1193,8 @@ int main(int argc, char** argv) {
     RUN_TEST(test_setEndpoint_copies_string_inputs);
     RUN_TEST(test_reconnect_transitions_through_reconnecting);
     RUN_TEST(test_server_close_reconnects_and_refires_on_connected);
+    RUN_TEST(test_server_close_with_disconnect_reconnects_once);
+    RUN_TEST(test_server_close_during_reconnecting_reconnects_once);
     RUN_TEST(test_dns_flush_on_transports_connecting_entry);
     RUN_TEST(test_https_only_no_auto_ws_and_send_routes);
     RUN_TEST(test_https_reply_reaches_client_onmessage);
