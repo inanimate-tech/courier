@@ -1,4 +1,5 @@
 #include <unity.h>
+#include <Arduino.h>
 #include <WebSocketTransport.h>
 #include <esp_websocket_client.h>
 #include <cstring>
@@ -38,6 +39,7 @@ static void onConnectionCallback(Transport* transport, bool connected) {
 static WebSocketTransport* ws = nullptr;
 
 void setUp(void) {
+    _mock_millis = 0;
     MockWebSocketClient::resetInstanceCount();
     ws = new WebSocketTransport();
     ws->setMessageCallback(onMessageCallback);
@@ -101,6 +103,133 @@ void test_disconnected_after_disconnect_event() {
     client->simulateDisconnect();
     ws->loop();
     TEST_ASSERT_FALSE(ws->isConnected());
+}
+
+void test_server_close_marks_disconnected_and_fails_promptly() {
+    int failures = 0;
+    ws->setFailureCallback([&]() { failures++; });
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    client->simulateConnect();
+    ws->loop();
+    TEST_ASSERT_TRUE(ws->isConnected());
+
+    _mock_millis = 1000;
+    client->simulateServerClose();
+    ws->loop();
+    TEST_ASSERT_FALSE(ws->isConnected());
+    TEST_ASSERT_FALSE(lastConnectionState);
+    TEST_ASSERT_EQUAL(0, failures);  // the IDF task is still finishing
+
+    _mock_millis = 1100;  // no SELF_HEAL_TIMEOUT wait: nothing will reconnect
+    ws->loop();
+    TEST_ASSERT_EQUAL(1, failures);
+
+    _mock_millis = 100000;
+    ws->loop();  // reported once, not again on later loops
+    TEST_ASSERT_EQUAL(1, failures);
+}
+
+void test_server_close_defers_to_client_when_close_reconnect_enabled() {
+    int failures = 0;
+    ws->setFailureCallback([&]() { failures++; });
+    ws->onConfigure([](esp_websocket_client_config_t& cfg) {
+        cfg.enable_close_reconnect = true;
+    });
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    client->simulateConnect();
+    ws->loop();
+
+    _mock_millis = 1000;
+    client->simulateServerClose();
+    ws->loop();
+    TEST_ASSERT_FALSE(ws->isConnected());
+    TEST_ASSERT_FALSE(lastConnectionState);
+    _mock_millis = 1100;
+    ws->loop();
+    TEST_ASSERT_EQUAL(0, failures);  // the client reconnects itself
+
+    // ...but if it never does, self-heal still escalates after the timeout.
+    _mock_millis = 1000 + 59999;
+    ws->loop();
+    TEST_ASSERT_EQUAL(0, failures);
+    _mock_millis = 1000 + 60000;
+    ws->loop();
+    TEST_ASSERT_EQUAL(1, failures);
+}
+
+void test_disconnect_event_still_waits_for_self_heal() {
+    int failures = 0;
+    ws->setFailureCallback([&]() { failures++; });
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    client->simulateConnect();
+    ws->loop();
+    client->simulateDisconnect();  // IDF auto-reconnect is still running
+    _mock_millis = 1000;
+    ws->loop();
+    TEST_ASSERT_EQUAL(0, failures);
+}
+
+// Neither IDF client sends both events for one close, but if both arrive,
+// in either order, the transport reports one failure, at the close's pace.
+void test_disconnect_then_close_report_one_failure() {
+    int failures = 0;
+    ws->setFailureCallback([&]() { failures++; });
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    client->simulateConnect();
+    ws->loop();
+
+    client->simulateDisconnect();
+    ws->loop();
+    client->simulateServerClose();
+    ws->loop();
+    _mock_millis = 100;
+    ws->loop();
+    TEST_ASSERT_EQUAL(1, failures);
+    _mock_millis = 100000;
+    ws->loop();
+    TEST_ASSERT_EQUAL(1, failures);
+}
+
+void test_close_then_disconnect_report_one_failure() {
+    int failures = 0;
+    ws->setFailureCallback([&]() { failures++; });
+    ws->begin("host", 443, "/path");
+    auto* client = MockWebSocketClient::lastInstance();
+    client->simulateConnect();
+    ws->loop();
+
+    client->simulateServerClose();
+    client->simulateDisconnect();  // both before loop() drains either
+    ws->loop();
+    _mock_millis = 100;
+    ws->loop();
+    TEST_ASSERT_EQUAL(1, failures);
+    _mock_millis = 100000;
+    ws->loop();
+    TEST_ASSERT_EQUAL(1, failures);
+}
+
+// A close the old client reported, not yet taken by loop(), must not fail
+// the connection begin() builds next.
+void test_close_before_rebegin_does_not_fail_next_client() {
+    int failures = 0;
+    ws->setFailureCallback([&]() { failures++; });
+    ws->begin("host", 443, "/path");
+    MockWebSocketClient::lastInstance()->simulateConnect();
+    ws->loop();
+
+    MockWebSocketClient::lastInstance()->simulateServerClose();
+    ws->begin("host", 443, "/path");  // e.g. Client tore down for another reason
+    MockWebSocketClient::lastInstance()->simulateConnect();
+    ws->loop();
+    _mock_millis = 100000;
+    ws->loop();
+    TEST_ASSERT_TRUE(ws->isConnected());
+    TEST_ASSERT_EQUAL(0, failures);
 }
 
 void test_message_delivered_to_callback() {
@@ -351,6 +480,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_begin_starts_client);
     RUN_TEST(test_connected_after_connect_event);
     RUN_TEST(test_disconnected_after_disconnect_event);
+    RUN_TEST(test_server_close_marks_disconnected_and_fails_promptly);
+    RUN_TEST(test_server_close_defers_to_client_when_close_reconnect_enabled);
+    RUN_TEST(test_disconnect_event_still_waits_for_self_heal);
+    RUN_TEST(test_disconnect_then_close_report_one_failure);
+    RUN_TEST(test_close_then_disconnect_report_one_failure);
+    RUN_TEST(test_close_before_rebegin_does_not_fail_next_client);
     RUN_TEST(test_message_delivered_to_callback);
     RUN_TEST(test_connection_callback_on_connect);
     RUN_TEST(test_connection_callback_on_disconnect);

@@ -53,6 +53,7 @@ typedef struct {
     const char* cert_pem;
     esp_err_t (*crt_bundle_attach)(void* conf);
     bool disable_auto_reconnect;
+    bool enable_close_reconnect;
     int pingpong_timeout_sec;
     void* user_context;
     int task_stack;
@@ -96,6 +97,16 @@ public:
         if (eventHandler) {
             eventHandler(eventHandlerArg, WEBSOCKET_EVENTS,
                         WEBSOCKET_EVENT_DISCONNECTED, nullptr);
+        }
+    }
+
+    // Server-initiated clean close: IDF 4.4 dispatches CLOSED (not
+    // DISCONNECTED) and its client task exits without reconnecting.
+    void simulateServerClose() {
+        connected = false;
+        if (eventHandler) {
+            eventHandler(eventHandlerArg, WEBSOCKET_EVENTS,
+                        WEBSOCKET_EVENT_CLOSED, nullptr);
         }
     }
 
