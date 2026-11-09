@@ -41,6 +41,18 @@ static auto tryAttachCertBundle(C& cfg, int)
 template <typename C>
 static bool tryAttachCertBundle(C&, long) { return false; }
 
+// esp_websocket_client 1.x can reconnect by itself after a server close
+// (enable_close_reconnect, off by default); IDF 4.4's built-in client has no
+// such field and never does. Same compile-time member detection as above.
+template <typename C>
+static auto closeReconnects(const C& cfg, int)
+    -> decltype((void)cfg.enable_close_reconnect, bool())
+{
+    return cfg.enable_close_reconnect;
+}
+template <typename C>
+static bool closeReconnects(const C&, long) { return false; }
+
 WebSocketTransport::WebSocketTransport()
 {
 }
@@ -99,6 +111,7 @@ void WebSocketTransport::freeReassemblyBuf()
 void WebSocketTransport::destroyClient()
 {
     _selfHealActive = false;
+    _selfHealTimeout = SELF_HEAL_TIMEOUT;
     if (_client) {
         esp_websocket_client_stop(_client);
         esp_websocket_client_destroy(_client);
@@ -106,6 +119,8 @@ void WebSocketTransport::destroyClient()
     }
     freeReassemblyBuf();
     _connected.store(false, std::memory_order_release);
+    // A close the old client reported must not fail the next connection.
+    _closedByServer.store(false, std::memory_order_release);
 }
 
 void WebSocketTransport::begin()
@@ -142,6 +157,9 @@ void WebSocketTransport::begin()
     // Allow caller to modify the raw IDF config before init
     if (_configureCallback) _configureCallback(config);
 
+    // Read after the callback: it is where a user turns the option on.
+    _reconnectsOnClose = closeReconnects(config, 0);
+
     _client = esp_websocket_client_init(&config);
     esp_websocket_register_events(_client, WEBSOCKET_EVENT_ANY,
                                    wsEventHandler, this);
@@ -157,10 +175,21 @@ void WebSocketTransport::loop()
 {
     drainPending();
 
+    // A server close ends the IDF client unless enable_close_reconnect is
+    // set, so nothing will reconnect it: fail after CLOSE_FAILURE_DELAY rather
+    // than SELF_HEAL_TIMEOUT. Either way the one self-heal timer reports it,
+    // once, however many of DISCONNECTED and CLOSED arrive.
+    if (_closedByServer.exchange(false, std::memory_order_acq_rel)) {
+        _disconnectedSinceMillis = millis();
+        _selfHealTimeout = _reconnectsOnClose ? SELF_HEAL_TIMEOUT
+                                              : CLOSE_FAILURE_DELAY;
+        _selfHealActive = true;
+    }
+
     if (_selfHealActive) {
         if (_connected.load(std::memory_order_acquire)) {
             _selfHealActive = false;
-        } else if (millis() - _disconnectedSinceMillis >= SELF_HEAL_TIMEOUT) {
+        } else if (millis() - _disconnectedSinceMillis >= _selfHealTimeout) {
             _selfHealActive = false;
             queueTransportFailed();
             drainPending();  // Deliver failure callback immediately
@@ -334,6 +363,21 @@ void WebSocketTransport::wsEventHandler(void* handler_arg,
         }
         break;
     }
+
+    case WEBSOCKET_EVENT_CLOSED:
+        // The server closed cleanly. The IDF client echoes the close frame,
+        // dispatches CLOSED (not DISCONNECTED) and its task exits, with no
+        // auto-reconnect unless enable_close_reconnect is set. That holds for
+        // IDF 4.4's built-in client and esp_websocket_client 1.x alike. Left
+        // unhandled, _connected stayed true with no socket, for good.
+        // IDF 4.4's task is still closing its transport here, and its
+        // destroy() does not wait for a task that stopped itself, so the
+        // failure is reported from loop(), not queued now.
+        ESP_LOGW(TAG, "Closed by server");
+        self->_connected.store(false, std::memory_order_release);
+        self->queueConnectionChange(false);
+        self->_closedByServer.store(true, std::memory_order_release);
+        break;
 
     case WEBSOCKET_EVENT_ERROR:
         ESP_LOGE(TAG, "WebSocket error");
