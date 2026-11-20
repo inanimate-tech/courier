@@ -138,6 +138,70 @@ void test_configure_wifi_runs_before_portal_without_saved_network() {
     TEST_ASSERT_TRUE(courier->getState() == State::WifiConfiguring);
 }
 
+void test_configure_wifi_runs_once_across_portal_and_autoconnect() {
+    // A new device: the portal first, then the network it saved.
+    WiFiManager::mockSavedSSID = "";
+    int calls = 0;
+    courier->onConfigureWiFi([&](WiFiManager&) { calls++; });
+    courier->setup();
+    courier->loop();  // WifiConnecting: the portal
+    TEST_ASSERT_TRUE(courier->getState() == State::WifiConfiguring);
+    WiFiManager::mockSavedSSID = "MockNetwork";
+    courier->loop();  // WifiConfiguring: the portal has closed
+    courier->loop();  // WifiConnecting: autoConnect with the saved network
+    TEST_ASSERT_EQUAL(1, calls);
+}
+
+void test_portal_maintenance_routes_are_closed_by_default() {
+    WiFiManager* wm = nullptr;
+    courier->onConfigureWiFi([&](WiFiManager& w) { wm = &w; });
+    courier->setup();
+    courier->loop();
+    TEST_ASSERT_NOT_NULL(wm);
+    wm->startWebServerForTests();
+    for (const char* path : {"/update", "/u", "/erase", "/restart"}) {
+        TEST_ASSERT_EQUAL_MESSAGE(302, wm->server->request(path), path);
+    }
+    TEST_ASSERT_EQUAL(0, wm->server->request("/wifi"));  // WiFiManager's own
+    TEST_ASSERT_EQUAL(3, (int)wm->mockMenu.size());
+    TEST_ASSERT_EQUAL_STRING("wifi", wm->mockMenu[0].c_str());
+    TEST_ASSERT_FALSE(wm->mockShowInfoUpdate);
+    TEST_ASSERT_FALSE(wm->mockShowInfoErase);
+}
+
+void test_users_menu_and_web_server_callback_still_apply() {
+    WiFiManager* wm = nullptr;
+    bool userCallbackRan = false;
+    courier->onConfigureWiFi([&](WiFiManager& w) {
+        wm = &w;
+        static const char* menu[] = {"wifi"};
+        w.setMenu(menu, 1);
+        w.setWebServerCallback([&] { userCallbackRan = true; });
+    });
+    courier->setup();
+    courier->loop();
+    wm->startWebServerForTests();
+    TEST_ASSERT_TRUE(userCallbackRan);
+    TEST_ASSERT_EQUAL(1, (int)wm->mockMenu.size());
+    TEST_ASSERT_EQUAL(302, wm->server->request("/u"));
+}
+
+void test_portal_maintenance_pages_can_be_kept() {
+    delete courier;
+    Config config;
+    config.host = "test.example.com";
+    config.portalMaintenancePages = true;
+    courier = new Client(config);
+    WiFiManager* wm = nullptr;
+    courier->onConfigureWiFi([&](WiFiManager& w) { wm = &w; });
+    courier->setup();
+    courier->loop();
+    wm->startWebServerForTests();
+    TEST_ASSERT_EQUAL(0, wm->server->request("/u"));  // WiFiManager's handler
+    TEST_ASSERT_TRUE(wm->mockMenu.empty());           // stock menu untouched
+    TEST_ASSERT_TRUE(wm->mockShowInfoUpdate);
+}
+
 void test_initial_state() {
     TEST_ASSERT_TRUE(courier->getState() == State::Booting);
 }
@@ -1198,6 +1262,10 @@ int main(int argc, char** argv) {
     RUN_TEST(test_initial_state);
     RUN_TEST(test_configure_wifi_runs_before_autoconnect_with_saved_network);
     RUN_TEST(test_configure_wifi_runs_before_portal_without_saved_network);
+    RUN_TEST(test_configure_wifi_runs_once_across_portal_and_autoconnect);
+    RUN_TEST(test_portal_maintenance_routes_are_closed_by_default);
+    RUN_TEST(test_users_menu_and_web_server_callback_still_apply);
+    RUN_TEST(test_portal_maintenance_pages_can_be_kept);
     RUN_TEST(test_setup_transitions_to_wifi_connecting);
     RUN_TEST(test_builtin_ws_registered);
     RUN_TEST(test_add_transport_returns_typed_ref);

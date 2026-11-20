@@ -6,6 +6,11 @@
 
 - `suspend()` / `resume()` are no longer described as the way to free RAM for an OTA update. They stop each transport's client without the state machine knowing (the state stays `Connected` and `onDisconnected` does not fire). The README and `docs/api.md` now point to `enterNetworkReady()` for a large HTTPS download that cannot share RAM with the transports.
 
+### Changed
+
+- **The config portal no longer serves WiFiManager's maintenance pages** (security). WiFiManager serves `/update`, `/u` (writes a firmware image), `/erase` and `/restart` whatever its menu shows, so anyone who joined a device's open setup access point could flash it, wipe its saved network or restart it. `Client` now closes those routes (they redirect to the first page; an upload is dropped), and the default menu is the WiFi page, Info and, with custom parameters, Setup, with no Update or Erase button on Info. `Config::portalMaintenancePages = true` restores WiFiManager's stock routes and menu. A `setMenu` or `setWebServerCallback` in `onConfigureWiFi` still applies.
+- **`onConfigureWiFi` runs once**, before WiFiManager first connects or serves the portal. It ran before every `autoConnect()`; WiFiManager keeps its settings, and a callback that added custom parameters added them again on each attempt.
+
 ### Fixed
 
 - `onConfigureWiFi` runs before the config portal starts on a device with no saved network. It ran only before `autoConnect()`, which `Client` calls only when a network is saved, so a new device's portal came up without the callback's title, menu or styling (or any other setting it makes).
