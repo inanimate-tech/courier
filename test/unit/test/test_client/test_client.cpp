@@ -88,6 +88,8 @@ static void advanceToConnected() {
 void setUp(void) {
     _mock_millis = 0;
     WiFi.resetMock();
+    WiFiManager::mockSavedSSID = "MockNetwork";
+    WiFiManager::mockPortalStarts = 0;
     MockWebSocketClient::resetInstanceCount();
     MockHttpClient::resetMock();  // default step carries the Date header
     Courier::systemClockForTests = 0;
@@ -109,6 +111,31 @@ void setUp(void) {
 void tearDown(void) {
     delete courier;
     courier = nullptr;
+}
+
+void test_configure_wifi_runs_before_autoconnect_with_saved_network() {
+    int calls = 0;
+    courier->onConfigureWiFi([&](WiFiManager&) { calls++; });
+    courier->setup();
+    courier->loop();  // WifiConnecting: autoConnect
+    TEST_ASSERT_EQUAL(1, calls);
+    TEST_ASSERT_EQUAL(0, WiFiManager::mockPortalStarts);
+}
+
+void test_configure_wifi_runs_before_portal_without_saved_network() {
+    WiFiManager::mockSavedSSID = "";
+    int calls = 0;
+    int portalStartsSeenByCallback = -1;
+    courier->onConfigureWiFi([&](WiFiManager&) {
+        calls++;
+        portalStartsSeenByCallback = WiFiManager::mockPortalStarts;
+    });
+    courier->setup();
+    courier->loop();  // WifiConnecting: no saved network, so the portal
+    TEST_ASSERT_EQUAL(1, calls);
+    TEST_ASSERT_EQUAL(0, portalStartsSeenByCallback);
+    TEST_ASSERT_EQUAL(1, WiFiManager::mockPortalStarts);
+    TEST_ASSERT_TRUE(courier->getState() == State::WifiConfiguring);
 }
 
 void test_initial_state() {
@@ -1169,6 +1196,8 @@ int main(int argc, char** argv) {
     UNITY_BEGIN();
 
     RUN_TEST(test_initial_state);
+    RUN_TEST(test_configure_wifi_runs_before_autoconnect_with_saved_network);
+    RUN_TEST(test_configure_wifi_runs_before_portal_without_saved_network);
     RUN_TEST(test_setup_transitions_to_wifi_connecting);
     RUN_TEST(test_builtin_ws_registered);
     RUN_TEST(test_add_transport_returns_typed_ref);

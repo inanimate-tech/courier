@@ -234,7 +234,7 @@ courier.onConfigureWiFi([](WiFiManager& wm) {
 });
 ```
 
-The `onConfigureWiFi` callback fires before `WiFiManager::autoConnect()` — use it for timeouts, hostname, custom parameters, etc.
+The `onConfigureWiFi` callback fires before `WiFiManager::autoConnect()`, and before `startConfigPortal()` when no network is saved, so it also styles the portal a new device starts with: use it for timeouts, hostname, custom parameters, the portal's title (`setTitle`), menu (`setMenu`) and styling (`setCustomHeadElement`), etc.
 
 Where several access points serve the SSID, `Client` joins the strongest: before each `autoConnect()` it sets an all-channel scan sorted by signal (`WIFI_ALL_CHANNEL_SCAN`, `WIFI_CONNECT_AP_BY_SIGNAL`) on `WiFi` and in the stored STA config. A BSSID pinned in that config is honoured. There is no roaming while connected.
 

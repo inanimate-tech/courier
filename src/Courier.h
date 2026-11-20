@@ -161,8 +161,9 @@ public:
 
   // --- WiFi configuration ---
   void setAPName(const char* name);
-  // Raw WiFiManager access — called before autoConnect. Use for custom
-  // parameters, timeouts, hostname, callbacks, etc.
+  // Raw WiFiManager access — called before autoConnect, and before the
+  // config portal starts when no network is saved. Use for custom
+  // parameters, timeouts, hostname, the portal's title and styling, etc.
   using WiFiConfigureCallback = std::function<void(WiFiManager&)>;
   void onConfigureWiFi(WiFiConfigureCallback cb);
 

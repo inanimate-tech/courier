@@ -151,7 +151,6 @@ void Client::handleWifiConnectingState()
     _wm.setAPCallback(staticWifiFailedCallback);
     _wm.setConnectTimeout(20);
     preferStrongestAccessPoint();
-    // Let users configure WiFiManager before autoConnect
     if (_wifiConfigureCallback) _wifiConfigureCallback(_wm);
     int res = _wm.autoConnect(_apName.c_str());
     if (res)
@@ -488,8 +487,12 @@ void Client::preferStrongestAccessPoint()
 #endif
 }
 
+// With no saved network the portal starts here, not through autoConnect(), so
+// the configure callback runs here as well: a portal's title, menu and
+// styling are set before it serves its first page.
 void Client::launchWiFiConfigPortal()
 {
+  if (_wifiConfigureCallback) _wifiConfigureCallback(_wm);
   _wm.startConfigPortal(_apName.c_str());
   transitionTo(State::WifiConfiguring);
 }

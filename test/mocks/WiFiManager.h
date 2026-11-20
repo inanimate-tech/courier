@@ -5,6 +5,10 @@
 
 class WiFiManager {
 public:
+    // Tests set these to drive the no-saved-network path and see what ran.
+    static inline String mockSavedSSID = "MockNetwork";
+    static inline int mockPortalStarts = 0;
+
     bool autoConnect() { return true; }
     bool autoConnect(const char* apName) { return true; }
     bool autoConnect(const char* apName, const char* apPassword) { return true; }
@@ -15,10 +19,10 @@ public:
     void setSaveConfigCallback(void (*func)(void)) {}
     void setAPCallback(void (*func)(WiFiManager*)) {}
     bool startConfigPortal() { return true; }
-    bool startConfigPortal(const char* apName) { return true; }
+    bool startConfigPortal(const char* apName) { mockPortalStarts++; return true; }
     bool startConfigPortal(const char* apName, const char* apPassword) { return true; }
     void process() {}
     String getConfigPortalSSID() { return String("MockAP"); }
-    String getWiFiSSID() { return String("MockNetwork"); }
+    String getWiFiSSID() { return mockSavedSSID; }
     bool getConfigPortalActive() { return false; }
 };
