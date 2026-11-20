@@ -1,10 +1,6 @@
 # Changelog
 
-## Unreleased
-
-### Docs
-
-- `suspend()` / `resume()` are no longer described as the way to free RAM for an OTA update. They stop each transport's client without the state machine knowing (the state stays `Connected` and `onDisconnected` does not fire). The README and `docs/api.md` now point to `enterNetworkReady()` for a large HTTPS download that cannot share RAM with the transports.
+## v0.11.0
 
 ### Changed
 
@@ -19,6 +15,10 @@
 - `WebSocketTransport` recovers from a server-initiated close. On a WebSocket close frame the client emits `WEBSOCKET_EVENT_CLOSED` (not `DISCONNECTED`) and its task exits without reconnecting. This is so on both of Courier's paths: IDF 4.4's built-in client (Arduino 2.x) and `esp_websocket_client` 1.x (IDF 5). `WebSocketTransport` ignored the event, so it stayed "connected" with no socket, forever. It now reports failure 100 ms after the close (time for IDF 4.4's client task, which exits by itself, to finish before the Client's teardown destroys the handle) and, if no other persistent transport is up, the Client reconnects: in the reporter's testing, reconnection after a server close went from never (3+ minutes) to 1.2 s. With another persistent transport still up, the closed WebSocket stays down until every persistent transport has failed or `reconnect()` is called. With `enable_close_reconnect` set through `onConfigure` (`esp_websocket_client` 1.x), the client reconnects itself. The 60 s self-heal window still runs, but each failed attempt restarts it, so a client that keeps retrying is not escalated. A `DISCONNECTED` arriving with the close does not report a second failure, and a close not yet acted on when the transport is torn down cannot fail the next connection. ([#37](https://github.com/inanimate-tech/courier/pull/37))
 
 ---
+
+### Docs
+
+- `suspend()` / `resume()` are no longer described as the way to free RAM for an OTA update. They stop each transport's client without the state machine knowing (the state stays `Connected` and `onDisconnected` does not fire). The README and `docs/api.md` now point to `enterNetworkReady()` for a large HTTPS download that cannot share RAM with the transports.
 
 ## v0.10.0
 
