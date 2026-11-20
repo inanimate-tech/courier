@@ -36,6 +36,12 @@ struct Config {
   const char* defaultTransport;  // e.g. "ws", "mqtt"; null disables Client::send
   uint32_t dns1;
   uint32_t dns2;
+  // The config portal's maintenance pages: WiFiManager's firmware upload
+  // (/update, /u), erase (/erase) and restart (/restart), and their menu
+  // entries. Off by default: the portal is an open access point, and
+  // anyone who joins it could otherwise flash or wipe the device. Set true
+  // for WiFiManager's stock routes and menu.
+  bool portalMaintenancePages = false;
 
   Config(const char* host = nullptr,
          uint16_t port = 443,
@@ -161,8 +167,11 @@ public:
 
   // --- WiFi configuration ---
   void setAPName(const char* name);
-  // Raw WiFiManager access — called before autoConnect. Use for custom
-  // parameters, timeouts, hostname, callbacks, etc.
+  // Raw WiFiManager access — called once, before WiFiManager first connects
+  // or serves the config portal (settings stay on the WiFiManager). Use for
+  // custom parameters, timeouts, hostname, the portal's title, menu and
+  // styling, etc. A web-server callback set here runs after Client's own,
+  // which closes the maintenance pages (Config::portalMaintenancePages).
   using WiFiConfigureCallback = std::function<void(WiFiManager&)>;
   void onConfigureWiFi(WiFiConfigureCallback cb);
 
@@ -191,7 +200,19 @@ private:
   String _defaultTransport;
 
   // WiFi
-  WiFiManager _wm;
+  // WiFiManager with access to the web-server callback a configure
+  // callback set, so Client can run its own first (closing the maintenance
+  // routes) and then the user's.
+  class PortalWiFiManager : public WiFiManager {
+   public:
+    std::function<void()> takeWebServerCallback() {
+      std::function<void()> cb = _webservercallback;
+      _webservercallback = nullptr;
+      return cb;
+    }
+  };
+  PortalWiFiManager _wm;
+  bool _wifiConfigured = false;
   WiFiConfigureCallback _wifiConfigureCallback;
   String _apName;
 
@@ -210,6 +231,7 @@ private:
   void restartWifiConnect();
   void preferStrongestAccessPoint();
   void launchWiFiConfigPortal();
+  void configureWiFiManager();
   static void staticWifiFailedCallback(WiFiManager* wm);
 
   // Time sync

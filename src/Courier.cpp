@@ -151,8 +151,7 @@ void Client::handleWifiConnectingState()
     _wm.setAPCallback(staticWifiFailedCallback);
     _wm.setConnectTimeout(20);
     preferStrongestAccessPoint();
-    // Let users configure WiFiManager before autoConnect
-    if (_wifiConfigureCallback) _wifiConfigureCallback(_wm);
+    configureWiFiManager();
     int res = _wm.autoConnect(_apName.c_str());
     if (res)
     {
@@ -488,10 +487,49 @@ void Client::preferStrongestAccessPoint()
 #endif
 }
 
+// With no saved network the portal starts here, not through autoConnect(), so
+// WiFiManager is configured here as well: a portal's title, menu and styling
+// are set before it serves its first page.
 void Client::launchWiFiConfigPortal()
 {
+  configureWiFiManager();
   _wm.startConfigPortal(_apName.c_str());
   transitionTo(State::WifiConfiguring);
+}
+
+// Once, before WiFiManager first connects or serves the portal: its settings
+// stay on the object, and some (custom parameters) would be added twice.
+//
+// The maintenance routes are closed by registering them first: WiFiManager
+// calls the web-server callback before it adds its own routes, and the web
+// server answers a request with the first route that matches. A route with
+// no upload handler takes no upload, so an image sent to /u is dropped.
+void Client::configureWiFiManager()
+{
+  if (_wifiConfigured) return;
+  _wifiConfigured = true;
+
+  if (!_config.portalMaintenancePages) {
+    static const char* menu[] = {"wifi", "info", "param"};
+    _wm.setMenu(menu, 3);
+    _wm.setShowInfoUpdate(false);
+    _wm.setShowInfoErase(false);
+  }
+  if (_wifiConfigureCallback) _wifiConfigureCallback(_wm);
+
+  std::function<void()> userWebServerCallback = _wm.takeWebServerCallback();
+  const bool closeMaintenance = !_config.portalMaintenancePages;
+  _wm.setWebServerCallback([this, closeMaintenance, userWebServerCallback]() {
+    if (closeMaintenance) {
+      for (const char* path : {"/update", "/u", "/erase", "/restart"}) {
+        _wm.server->on(path, [this]() {
+          _wm.server->sendHeader("Location", "/");
+          _wm.server->send(302, "text/plain", "");
+        });
+      }
+    }
+    if (userWebServerCallback) userWebServerCallback();
+  });
 }
 
 void Client::staticWifiFailedCallback(WiFiManager* wm)

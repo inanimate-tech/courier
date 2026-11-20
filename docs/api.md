@@ -234,7 +234,44 @@ courier.onConfigureWiFi([](WiFiManager& wm) {
 });
 ```
 
-The `onConfigureWiFi` callback fires before `WiFiManager::autoConnect()` — use it for timeouts, hostname, custom parameters, etc.
+The `onConfigureWiFi` callback runs **once**, before WiFiManager first connects or serves the config portal: before `autoConnect()` when a network is saved, before `startConfigPortal()` when none is. WiFiManager keeps its settings, so a later connect or portal uses them; don't rely on the callback running again (`addParameter` there would add each field twice). Use it for timeouts, hostname, custom parameters, and the portal's title (`setTitle`), menu (`setMenu`) and styling (`setCustomHeadElement`).
+
+### The config portal's maintenance pages
+
+The portal is an open access point, and WiFiManager serves pages that upload firmware (`/update`, and `/u`, which writes the image), erase the saved network (`/erase`) and restart (`/restart`) whatever its menu shows. `Client` closes them by default: they redirect to the portal's first page, and an upload to `/u` is dropped. The default menu is the WiFi page, Info, and Setup when there are custom parameters, and Info has no Update or Erase button. A `setMenu` in `onConfigureWiFi` replaces that menu (it can't reopen the closed pages).
+
+```cpp
+Courier::Config config;
+config.portalMaintenancePages = true;   // WiFiManager's stock routes and menu
+```
+
+`Client` closes the pages from WiFiManager's web-server callback. A `setWebServerCallback` of your own in `onConfigureWiFi` still runs, after `Client`'s.
+
+### The portal's words
+
+`setTitle` changes the title and the heading of the first page. Every other word on the portal's pages (button labels, the saved message, the WiFi form's labels) is a compile-time string in WiFiManager, and WiFiManager takes a replacement file through `WM_STRINGS_FILE`. `WiFiManager.h` includes it, so every compile that includes Courier needs the definition, WiFiManager's own included. With PlatformIO, set it for the whole project:
+
+```ini
+build_flags =
+    -DWM_STRINGS_FILE=\"portal_strings.h\"
+    -I$PROJECT_DIR/include
+```
+
+To change only some strings, rename the stock definitions out of the way, include the stock file, and define your own; every other string stays WiFiManager's, so a WiFiManager release that adds one still builds:
+
+```cpp
+// include/portal_strings.h
+#pragma once
+#define S_titlewifi wm_stock_S_titlewifi
+#define HTTP_SAVED  wm_stock_HTTP_SAVED
+#include "wm_strings_en.h"
+#undef S_titlewifi
+#undef HTTP_SAVED
+
+const char S_titlewifi[] PROGMEM = "Set up WiFi";
+const char HTTP_SAVED[]  PROGMEM =
+    "<div class='msg'>Saved. The device is joining your network now.</div>";
+```
 
 Where several access points serve the SSID, `Client` joins the strongest: before each `autoConnect()` it sets an all-channel scan sorted by signal (`WIFI_ALL_CHANNEL_SCAN`, `WIFI_CONNECT_AP_BY_SIGNAL`) on `WiFi` and in the stored STA config. A BSSID pinned in that config is honoured. There is no roaming while connected.
 
