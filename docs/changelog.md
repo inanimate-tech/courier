@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **`Client::openConfigPortal()`** serves the config portal at the next WiFi connect even when a network is saved, which stays saved. Call it before `setup()`, for instance when a button is held at boot, to let a person move a device to another network; powering it off and on keeps the network it has.
+
 ## v0.11.0
 
 ### Changed

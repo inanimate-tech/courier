@@ -236,6 +236,15 @@ courier.onConfigureWiFi([](WiFiManager& wm) {
 
 The `onConfigureWiFi` callback runs **once**, before WiFiManager first connects or serves the config portal: before `autoConnect()` when a network is saved, before `startConfigPortal()` when none is. WiFiManager keeps its settings, so a later connect or portal uses them; don't rely on the callback running again (`addParameter` there would add each field twice). Use it for timeouts, hostname, custom parameters, and the portal's title (`setTitle`), menu (`setMenu`) and styling (`setCustomHeadElement`).
 
+### Opening the portal on request
+
+```cpp
+if (buttonHeldAtBoot) courier.openConfigPortal();
+courier.setup();
+```
+
+`openConfigPortal()` serves the config portal at the next WiFi connect even when a network is saved, and leaves that network saved: a person can choose another one, or power the device off and on to keep the one it has. Call it before `setup()`. Once the portal closes, the device connects as usual. It is how a device with no screen to type on offers a change of network.
+
 ### The config portal's maintenance pages
 
 The portal is an open access point, and WiFiManager serves pages that upload firmware (`/update`, and `/u`, which writes the image), erase the saved network (`/erase`) and restart (`/restart`) whatever its menu shows. `Client` closes them by default: they redirect to the portal's first page, and an upload to `/u` is dropped. The default menu is the WiFi page, Info, and Setup when there are custom parameters, and Info has no Update or Erase button. A `setMenu` in `onConfigureWiFi` replaces that menu (it can't reopen the closed pages).

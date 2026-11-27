@@ -152,6 +152,29 @@ void test_configure_wifi_runs_once_across_portal_and_autoconnect() {
     TEST_ASSERT_EQUAL(1, calls);
 }
 
+void test_open_config_portal_serves_it_with_a_saved_network() {
+    int calls = 0;
+    courier->onConfigureWiFi([&](WiFiManager&) { calls++; });
+    courier->openConfigPortal();
+    courier->setup();
+    courier->loop();  // WifiConnecting: the requested portal, not autoConnect
+    TEST_ASSERT_EQUAL(1, calls);
+    TEST_ASSERT_EQUAL(1, WiFiManager::mockPortalStarts);
+    TEST_ASSERT_TRUE(courier->getState() == State::WifiConfiguring);
+    TEST_ASSERT_EQUAL_STRING("MockNetwork", WiFiManager::mockSavedSSID.c_str());
+}
+
+void test_open_config_portal_serves_it_once() {
+    courier->openConfigPortal();
+    courier->setup();
+    courier->loop();  // WifiConnecting: the requested portal
+    courier->loop();  // WifiConfiguring: the portal has closed
+    TEST_ASSERT_TRUE(courier->getState() == State::WifiConnecting);
+    courier->loop();  // WifiConnecting: autoConnect with the saved network
+    TEST_ASSERT_EQUAL(1, WiFiManager::mockPortalStarts);
+    TEST_ASSERT_TRUE(courier->getState() == State::WifiConnected);
+}
+
 void test_portal_maintenance_routes_are_closed_by_default() {
     WiFiManager* wm = nullptr;
     courier->onConfigureWiFi([&](WiFiManager& w) { wm = &w; });
@@ -1263,6 +1286,8 @@ int main(int argc, char** argv) {
     RUN_TEST(test_configure_wifi_runs_before_autoconnect_with_saved_network);
     RUN_TEST(test_configure_wifi_runs_before_portal_without_saved_network);
     RUN_TEST(test_configure_wifi_runs_once_across_portal_and_autoconnect);
+    RUN_TEST(test_open_config_portal_serves_it_with_a_saved_network);
+    RUN_TEST(test_open_config_portal_serves_it_once);
     RUN_TEST(test_portal_maintenance_routes_are_closed_by_default);
     RUN_TEST(test_users_menu_and_web_server_callback_still_apply);
     RUN_TEST(test_portal_maintenance_pages_can_be_kept);
