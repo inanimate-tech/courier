@@ -145,6 +145,14 @@ void Client::loop()
 
 void Client::handleWifiConnectingState()
 {
+  if (_portalRequested)
+  {
+    _portalRequested = false;
+    Serial.println("[courier] Config portal requested.");
+    launchWiFiConfigPortal();
+    return;
+  }
+
   String configuredSSID = _wm.getWiFiSSID();
   if (configuredSSID.length())
   {
@@ -867,6 +875,11 @@ void Client::onTransportsWillConnect(Callback cb)
 void Client::onTransportsDidConnect(Callback cb)
 {
   _didConnectHook = cb;
+}
+
+void Client::openConfigPortal()
+{
+  _portalRequested = true;
 }
 
 void Client::onConfigureWiFi(WiFiConfigureCallback cb)

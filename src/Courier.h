@@ -174,6 +174,12 @@ public:
   // which closes the maintenance pages (Config::portalMaintenancePages).
   using WiFiConfigureCallback = std::function<void(WiFiManager&)>;
   void onConfigureWiFi(WiFiConfigureCallback cb);
+  // Serve the config portal at the next WiFi connect, even with a network
+  // saved, which stays saved: a person can choose another network, or power
+  // the device off and on to keep the one it has. Call it before setup(),
+  // e.g. when a button is held at boot. Once the portal closes, the device
+  // connects as usual.
+  void openConfigPortal();
 
 private:
   Config _config;
@@ -213,6 +219,7 @@ private:
   };
   PortalWiFiManager _wm;
   bool _wifiConfigured = false;
+  bool _portalRequested = false;
   WiFiConfigureCallback _wifiConfigureCallback;
   String _apName;
 
